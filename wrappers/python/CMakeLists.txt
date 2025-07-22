@@ -1,5 +1,4 @@
-#  minimum required cmake version: 3.1.0
-cmake_minimum_required(VERSION 3.1.0)
+cmake_minimum_required(VERSION 3.8)
 
 project(RealsensePythonWrappers)
 
@@ -46,7 +45,8 @@ set(RAW_RS
     ../../src/frame.cpp
     ../../src/environment.cpp
     ../../src/to-string.cpp
-    ../../src/core/streaming.cpp
+    ../../src/core/options-container.cpp
+    ../../src/core/options-registry.cpp
 )
 
 if(UNIX)
@@ -126,6 +126,7 @@ if(${BACKEND} STREQUAL RS2_USE_LIBUVC_BACKEND)
     )
 endif()
 
+if( BUILD_LEGACY_PYBACKEND )
 pybind11_add_module(pybackend2 SHARED ${RAW_RS})
 
 if(USE_EXTERNAL_USB)
@@ -147,6 +148,37 @@ if(APPLE)
 endif()
 endif()
 
+if(${BACKEND} STREQUAL RS2_USE_V4L2_BACKEND)
+    if(UDEV_FOUND)
+        target_sources( pybackend2
+            PRIVATE
+                ../../src/linux/udev-device-watcher.cpp
+                ../../src/linux/udev-device-watcher.h
+            )
+        target_link_libraries( pybackend2 PRIVATE udev )
+        target_compile_definitions( pybackend2 PRIVATE -DUSING_UDEV )
+    endif()
+endif()
+
+install(TARGETS pybackend2 pyrealsense2
+    EXPORT pyrealsense2Targets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${PYTHON_INSTALL_DIR}
+    ARCHIVE DESTINATION ${PYTHON_INSTALL_DIR}
+)
+
+target_include_directories(pybackend2 PRIVATE ../../src)
+
+else() # not BUILD_LEGACY_PYBACKEND
+
+install(TARGETS pyrealsense2
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${PYTHON_INSTALL_DIR}
+    ARCHIVE DESTINATION ${PYTHON_INSTALL_DIR}
+)
+
+endif()  # BUILD_LEGACY_PYBACKEND
+
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/pyrealsense2ConfigVersion.cmake"
     VERSION ${REALSENSE_VERSION_STRING} COMPATIBILITY AnyNewerVersion)
 
@@ -154,13 +186,6 @@ configure_package_config_file(../../CMake/pyrealsense2Config.cmake.in pyrealsens
     INSTALL_DESTINATION ${CMAKECONFIG_PY_INSTALL_DIR}
     INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX}/bin
     PATH_VARS CMAKE_INSTALL_INCLUDEDIR
-)
-
-install(TARGETS pybackend2 pyrealsense2
-    EXPORT pyrealsense2Targets
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${PYTHON_INSTALL_DIR}
-    ARCHIVE DESTINATION ${PYTHON_INSTALL_DIR}
 )
 
 install(EXPORT pyrealsense2Targets
@@ -176,7 +201,10 @@ install(FILES "${CMAKE_BINARY_DIR}/wrappers/python/pyrealsense2ConfigVersion.cma
     DESTINATION ${CMAKECONFIG_PY_INSTALL_DIR}
 )
 
-target_include_directories(pybackend2 PRIVATE ../../src)
+install(FILES pyrealsense2/__init__.py
+    DESTINATION ${PYTHON_INSTALL_DIR}
+)
+
 target_include_directories(pyrealsense2 PRIVATE ../../src)
 
 if (BUILD_PYTHON_DOCS)

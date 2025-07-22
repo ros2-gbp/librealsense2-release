@@ -1,9 +1,11 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2015 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2015-2024 Intel Corporation. All Rights Reserved.
 
 #pragma once
 
 #include "backend.h"
+#include <src/platform/uvc-device.h>
+#include <src/metadata.h>
 #include "types.h"
 
 #include <cassert>
@@ -144,6 +146,7 @@ namespace librealsense
             uint8_t* _start;
             uint32_t _length;
             uint32_t _original_length;
+            uint32_t _offset;
             bool _use_memory_map;
             uint32_t _index;
             v4l2_buffer _buf;
@@ -315,6 +318,7 @@ namespace librealsense
                                        const std::string&)> action);
 
             static std::vector<std::string> get_video_paths();
+            static std::vector<std::string> get_mipi_dfu_paths();
 
             static bool is_usb_path_valid(const std::string& usb_video_path, const std::string &dev_name,
                                           std::string &busnum, std::string &devnum, std::string &devpath);
@@ -325,6 +329,9 @@ namespace librealsense
 
             static uvc_device_info get_info_from_mipi_device_path(const std::string& video_path, const std::string& name);
 
+            static bool is_format_supported_on_node(const std::string& dev_name, std::string v4l_4cc_fmt);
+            static bool is_device_depth_node(const std::string& dev_name);
+            static uint16_t get_mipi_device_pid(const std::string& dev_name);
             static void get_mipi_device_info(const std::string& dev_name,
                                              std::string& bus_info, std::string& card);
 
@@ -370,6 +377,8 @@ namespace librealsense
             std::string get_device_location() const override { return _device_path; }
             usb_spec get_usb_specification() const override { return _device_usb_spec; }
 
+            bool is_platform_jetson() const override {return false;}
+
         protected:
             virtual uint32_t get_cid(rs2_option option) const;
 
@@ -399,6 +408,8 @@ namespace librealsense
             virtual inline std::shared_ptr<buffer> get_video_buffer(__u32 index) const {return _buffers[index];}
             virtual inline std::shared_ptr<buffer> get_md_buffer(__u32 index) const {return nullptr;}
 
+            static bool get_devname_from_video_path(const std::string& real_path, std::string& devname, bool is_for_dfu = false);
+
             power_state _state = D3;
             std::string _name = "";
             std::string _device_path = "";
@@ -413,6 +424,12 @@ namespace librealsense
             std::atomic<bool> _is_started;
             std::unique_ptr<std::thread> _thread;
             std::unique_ptr<named_mutex> _named_mtx;
+            struct device {
+                enum v4l2_buf_type buf_type;
+                unsigned char num_planes;
+                struct v4l2_capability cap;
+                struct v4l2_cropcap cropcap;
+            } _dev;
             bool _use_memory_map;
             int _max_fd = 0;                    // specifies the maximal pipe number the polling process will monitor
             std::vector<int>  _fds;             // list the file descriptors to be monitored during frames polling
@@ -434,6 +451,8 @@ namespace librealsense
 
             virtual ~v4l_uvc_meta_device();
 
+            bool is_platform_jetson() const override {return false;}
+
         protected:
 
             void streamon() const;
@@ -450,6 +469,7 @@ namespace librealsense
             virtual inline std::shared_ptr<buffer> get_md_buffer(__u32 index) const {return _md_buffers[index];}
             int _md_fd = -1;
             std::string _md_name = "";
+            v4l2_buf_type _md_type = LOCAL_V4L2_BUF_TYPE_META_CAPTURE;
 
             std::vector<std::shared_ptr<buffer>> _md_buffers;
         };
@@ -459,6 +479,19 @@ namespace librealsense
         {
         public:
             v4l_mipi_device(const uvc_device_info& info, bool use_memory_map = true);
+            v4l_mipi_device(const mipi_device_info& info, bool use_memory_map = true);
+
+            static void foreach_mipi_device(
+                    std::function<void(const mipi_device_info&,
+                                       const std::string&)> action);
+
+            static std::vector<std::string> get_video_paths();
+
+            static mipi_device_info get_info_from_mipi_device_path(
+                    const std::string& video_path, const std::string& name);
+
+            static void get_mipi_device_info(const std::string& dev_name,
+                                             std::string& bus_info, std::string& card);
 
             virtual ~v4l_mipi_device();
 
@@ -469,6 +502,7 @@ namespace librealsense
             control_range get_xu_range(const extension_unit& xu, uint8_t control, int len) const override;
             control_range get_pu_range(rs2_option option) const override;
             void set_metadata_attributes(buffers_mgr& buf_mgr, __u32 bytesused, uint8_t* md_start) override;
+            bool is_platform_jetson() const override;
         protected:
             virtual uint32_t get_cid(rs2_option option) const;
             uint32_t xu_to_cid(const extension_unit& xu, uint8_t control) const; // Find the mapping of XU to the underlying control
@@ -486,7 +520,8 @@ namespace librealsense
             std::shared_ptr<hid_device> create_hid_device(hid_device_info info) const override;
             std::vector<hid_device_info> query_hid_devices() const override;
 
-            std::shared_ptr<time_service> create_time_service() const override;
+            std::vector<mipi_device_info> query_mipi_devices() const override;
+
             std::shared_ptr<device_watcher> create_device_watcher() const override;
         };
     }
