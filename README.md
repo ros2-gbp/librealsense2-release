@@ -1,3 +1,26 @@
+## librealsense2 (jazzy) - 2.56.4-1
+
+The packages in the `librealsense2` repository were released into the `jazzy` distro by running `/usr/bin/bloom-release --rosdistro jazzy --track jazzy --override-release-repository-url https://github.com/ros2-gbp/librealsense2-release.git --override-release-repository-push-url https://github.com/ros2-gbp/librealsense2-release.git librealsense2 --edit` on `Tue, 22 Jul 2025 11:53:43 -0000`
+
+The `librealsense2` package was released.
+
+Version of package(s) in repository `librealsense2`:
+
+- upstream repository: https://github.com/IntelRealSense/librealsense.git
+- release repository: https://github.com/IntelRealSense/librealsense2-release.git
+- rosdistro version: `2.55.1-1`
+- old version: `2.55.1-1`
+- new version: `2.56.4-1`
+
+Versions of tools used:
+
+- bloom version: `0.13.0`
+- catkin_pkg version: `1.0.0`
+- rosdep version: `0.25.1`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## librealsense2 (rolling) - 2.56.4-1
 
 The packages in the `librealsense2` repository were released into the `rolling` distro by running `/usr/bin/bloom-release --new-track --rosdistro rolling --track rolling librealsense2 --edit` on `Tue, 22 Jul 2025 10:02:48 -0000`
