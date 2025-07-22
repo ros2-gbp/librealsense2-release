@@ -1,3 +1,4 @@
+release_repo_url: https://github.com/ros2-gbp/librealsense2-release.git
 tracks:
   dashing:
     actions:
