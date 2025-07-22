@@ -295,4 +295,4 @@ tracks:
     ros_distro: rolling
     vcs_type: git
     vcs_uri: https://github.com/IntelRealSense/librealsense.git
-    version: 2.54.1
+    version: 2.56.4
