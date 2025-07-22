@@ -1,25 +1,34 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2016 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2016-24 Intel Corporation. All Rights Reserved.
 
 #include <cstddef>
 #include "metadata.h"
 
-#include "ds/ds-timestamp.h"
-#include "d400-thermal-monitor.h"
+#include <src/ds/ds-timestamp.h>
+#include <src/ds/ds-thermal-monitor.h>
 #include "proc/color-formats-converter.h"
 #include "d400-color.h"
+#include "d400-info.h"
+#include <src/backend.h>
+#include <src/platform/platform-utils.h>
+#include <src/metadata-parser.h>
+
+#include <src/ds/features/auto-exposure-roi-feature.h>
+
 #include <rsutils/string/from.h>
+#include <rsutils/type/fourcc.h>
+using rs_fourcc = rsutils::type::fourcc;
 
 namespace librealsense
 {
-    std::map<uint32_t, rs2_format> d400_color_fourcc_to_rs2_format = {
+    std::map<rs_fourcc::value_type, rs2_format> d400_color_fourcc_to_rs2_format = {
          {rs_fourcc('Y','U','Y','2'), RS2_FORMAT_YUYV},
          {rs_fourcc('Y','U','Y','V'), RS2_FORMAT_YUYV},
          {rs_fourcc('U','Y','V','Y'), RS2_FORMAT_UYVY},
          {rs_fourcc('M','J','P','G'), RS2_FORMAT_MJPEG},
          {rs_fourcc('B','Y','R','2'), RS2_FORMAT_RAW16}
     };
-    std::map<uint32_t, rs2_stream> d400_color_fourcc_to_rs2_stream = {
+    std::map<rs_fourcc::value_type, rs2_stream> d400_color_fourcc_to_rs2_stream = {
         {rs_fourcc('Y','U','Y','2'), RS2_STREAM_COLOR},
         {rs_fourcc('Y','U','Y','V'), RS2_STREAM_COLOR},
         {rs_fourcc('U','Y','V','Y'), RS2_STREAM_COLOR},
@@ -27,27 +36,26 @@ namespace librealsense
         {rs_fourcc('M','J','P','G'), RS2_STREAM_COLOR}
     };
 
-    d400_color::d400_color(std::shared_ptr<context> ctx,
-        const platform::backend_device_group& group)
-        : d400_device(ctx, group), device(ctx, group),
+    d400_color::d400_color( std::shared_ptr< const d400_info > const & dev_info )
+        : d400_device(dev_info), device(dev_info),
           _color_stream(new stream(RS2_STREAM_COLOR)),
           _separate_color(true)
     {
-        create_color_device(ctx, group);
+        create_color_device( dev_info->get_context(), dev_info->get_group() );
         init();
     }
 
     void d400_color::create_color_device(std::shared_ptr<context> ctx, const platform::backend_device_group& group)
     {
         using namespace ds;
-        auto&& backend = ctx->get_backend();
 
         _color_calib_table_raw = [this]()
         {
             return get_d400_raw_calibration_table(d400_calibration_table_id::rgb_calibration_id);
         };
 
-        _color_extrinsic = std::make_shared<lazy<rs2_extrinsics>>([this]() { return from_pose(get_d400_color_stream_extrinsic(*_color_calib_table_raw)); });
+        _color_extrinsic = std::make_shared< rsutils::lazy< rs2_extrinsics > >(
+            [this]() { return from_pose( get_d400_color_stream_extrinsic( *_color_calib_table_raw ) ); } );
         environment::get_instance().get_extrinsics_graph().register_extrinsics(*_color_stream, *_depth_stream, _color_extrinsic);
         register_stream_to_extrinsic_group(*_color_stream, 0);
 
@@ -63,7 +71,7 @@ namespace librealsense
                 color_devs_info = group.uvc_devices;
             else
                 color_devs_info = color_devs_info_mi3;
-            std::unique_ptr<frame_timestamp_reader> d400_timestamp_reader_backup(new ds_timestamp_reader(backend.create_time_service()));
+            std::unique_ptr< frame_timestamp_reader > d400_timestamp_reader_backup( new ds_timestamp_reader() );
             frame_timestamp_reader* timestamp_reader_from_metadata;
             if (ds::RS457_PID != _pid)
                 timestamp_reader_from_metadata = new ds_timestamp_reader_from_metadata(std::move(d400_timestamp_reader_backup));
@@ -78,7 +86,7 @@ namespace librealsense
                 info = color_devs_info[1];
             else
                 info = color_devs_info.front();
-            auto uvcd = backend.create_uvc_device(info);
+            auto uvcd = get_backend()->create_uvc_device( info );
             //auto ftr = std::unique_ptr<frame_timestamp_reader>(new global_timestamp_reader(std::move(d400_timestamp_reader_metadata), _tf_keeper, enable_global_time_option));
             auto raw_color_ep = std::make_shared<uvc_sensor>("Raw RGB Camera",
                 uvcd,
@@ -110,19 +118,36 @@ namespace librealsense
             }
             else
                 throw invalid_value_exception( rsutils::string::from() << "RS4XX: RGB modules inconsistency - "
-                                                                         << color_devs_info.size() << " found" );
+                                                                         << color_devs_info_mi0.size() << " found" );
         }
+    }
+
+    void d400_color::register_color_features()
+    {
+        firmware_version fw_ver = firmware_version( get_info( RS2_CAMERA_INFO_FIRMWARE_VERSION ) );
+
+        if( fw_ver >= firmware_version( 5, 10, 9, 0 ) && _pid != ds::RS405_PID ) //D405 does not support an actual RGB sensor
+            register_feature( std::make_shared< auto_exposure_roi_feature >( get_color_sensor(), _hw_monitor, true ) );
+    }
+
+    rs2_format d400_color::get_color_format() const
+    {
+        auto const format_conversion = get_format_conversion();
+        rs2_format const color_format
+            = (format_conversion == format_conversion::full) ? RS2_FORMAT_RGB8 : RS2_FORMAT_YUYV;
+        return color_format;
     }
 
     void d400_color::init()
     {
         auto& color_ep = get_color_sensor();
-        auto& raw_color_ep = get_raw_color_sensor();
+        auto raw_color_ep = get_raw_color_sensor();
     
-        _ds_color_common = std::make_shared<ds_color_common>(raw_color_ep, color_ep, 
-            _fw_version, _hw_monitor, this);
+        _ds_color_common = std::make_shared<ds_color_common>(raw_color_ep, color_ep, _fw_version, _hw_monitor, this);
 
+        register_color_features();
         register_options();
+
         if (_pid != ds::RS457_PID)
         {
             register_metadata(color_ep);
@@ -131,17 +156,27 @@ namespace librealsense
         {
             register_metadata_mipi(color_ep);
         }
-        register_processing_blocks();       
+        register_processing_blocks();
+
+        auto_calibrated::add_color_write_observer( [this]() {  _color_calib_table_raw.reset(); } );
     }
 
     void d400_color::register_options()
     {
         auto& color_ep = get_color_sensor();
-        auto& raw_color_ep = get_raw_color_sensor();
 
         if (!val_in_range(_pid, { ds::RS457_PID }))
         {
             _ds_color_common->register_color_options();
+            color_ep.register_pu(RS2_OPTION_BACKLIGHT_COMPENSATION);
+
+            auto raw_color_ep = get_raw_color_sensor();
+            color_ep.register_option(RS2_OPTION_POWER_LINE_FREQUENCY,
+                std::make_shared<uvc_pu_option>(raw_color_ep, RS2_OPTION_POWER_LINE_FREQUENCY,
+                    std::map<float, std::string>{ { 0.f, "Disabled"},
+                    { 1.f, "50Hz" },
+                    { 2.f, "60Hz" },
+                    { 3.f, "Auto" }, }));
         }
 
         if (_separate_color)
@@ -149,15 +184,7 @@ namespace librealsense
             // Currently disabled for certain sensors
             if (!val_in_range(_pid, { ds::RS457_PID}))
             {
-                if (!val_in_range(_pid, { ds::RS465_PID }))
-                {
-                    color_ep.register_pu(RS2_OPTION_AUTO_EXPOSURE_PRIORITY);
-                }
-                // From 5.11.15 auto-exposure priority is supported on the D465
-                else if (_fw_version >= firmware_version("5.11.15.0"))
-                {
-                    color_ep.register_pu(RS2_OPTION_AUTO_EXPOSURE_PRIORITY);
-                }
+                color_ep.register_pu(RS2_OPTION_AUTO_EXPOSURE_PRIORITY);
             }
 
             _ds_color_common->register_standard_options();
@@ -172,7 +199,7 @@ namespace librealsense
         }
 
         // Currently disabled for certain sensors
-        if (!val_in_range(_pid, { ds::RS465_PID, ds::RS457_PID}))
+        if (!val_in_range(_pid, { ds::RS457_PID }))
         {
             color_ep.register_pu(RS2_OPTION_HUE);
         }
@@ -180,9 +207,18 @@ namespace librealsense
 
     void d400_color::register_metadata(const synthetic_sensor& color_ep) const
     {
+        color_ep.register_metadata(RS2_FRAME_METADATA_FRAME_TIMESTAMP, make_uvc_header_parser(&platform::uvc_header::timestamp));
+
+        auto md_prop_offset = metadata_raw_mode_offset +
+            offsetof(md_rgb_mode, rgb_mode) +
+            offsetof(md_rgb_normal_mode, intel_capture_timing);
+
+        color_ep.register_metadata(RS2_FRAME_METADATA_SENSOR_TIMESTAMP, make_rs400_sensor_ts_parser(make_uvc_header_parser(&platform::uvc_header::timestamp),
+            make_attribute_parser(&md_capture_timing::sensor_timestamp, md_capture_timing_attributes::sensor_timestamp_attribute, md_prop_offset)));
+
         if (_separate_color)
         {
-            auto md_prop_offset = offsetof(metadata_raw, mode) +
+            auto md_prop_offset = metadata_raw_mode_offset +
                 offsetof(md_rgb_mode, rgb_mode) +
                 offsetof(md_rgb_normal_mode, intel_rgb_control);
 
@@ -192,7 +228,7 @@ namespace librealsense
         else
         {
             // attributes of md_rgb_control
-            auto md_prop_offset = offsetof(metadata_raw, mode) +
+            auto md_prop_offset = metadata_raw_mode_offset +
                 offsetof(md_rgb_mode, rgb_mode) +
                 offsetof(md_rgb_normal_mode, intel_rgb_control);
 
@@ -207,7 +243,7 @@ namespace librealsense
         // attributes of md_capture_stats
         auto& color_ep = get_color_sensor();
         // attributes of md_rgb_control
-        auto& raw_color_ep = get_raw_color_sensor();
+        auto raw_color_ep = get_raw_color_sensor();
 
         if (_pid != ds::RS457_PID)
         {
@@ -216,16 +252,23 @@ namespace librealsense
         }
         else
         {
-            // Work-around for discrepancy between the RGB YUYV descriptor and the parser . Use UYUV parser instead
-            color_ep.register_processing_block(processing_block_factory::create_pbf_vector<uyvy_converter>(RS2_FORMAT_UYVY, map_supported_color_formats(RS2_FORMAT_UYVY), RS2_STREAM_COLOR));
-            color_ep.register_processing_block(processing_block_factory::create_pbf_vector<uyvy_converter>(RS2_FORMAT_YUYV, map_supported_color_formats(RS2_FORMAT_YUYV), RS2_STREAM_COLOR));
-        }
-        
-        if (_pid == ds::RS465_PID)
-        {
-            color_ep.register_processing_block({ {RS2_FORMAT_MJPEG} }, { {RS2_FORMAT_RGB8, RS2_STREAM_COLOR} }, []() { return std::make_shared<mjpeg_converter>(RS2_FORMAT_RGB8); });
-            color_ep.register_processing_block(processing_block_factory::create_id_pbf(RS2_FORMAT_MJPEG, RS2_STREAM_COLOR));
-        }
+            auto uvc_dev = raw_color_ep->get_uvc_device();
+            if (uvc_dev->is_platform_jetson())
+            {
+                // Work-around for discrepancy between the RGB YUYV descriptor and the parser. Use UYUV parser instead.
+                // Bytes are reveiced swapped, so YUYV format is received as UYVY.
+                color_ep.register_processing_block( processing_block_factory::create_pbf_vector< uyvy_converter >( RS2_FORMAT_YUYV,
+                                                                                                                   map_supported_color_formats( RS2_FORMAT_YUYV, false ),
+                                                                                                                   RS2_STREAM_COLOR ) );
+                color_ep.register_processing_block( { { RS2_FORMAT_YUYV } },
+                                                    { { RS2_FORMAT_YUYV, RS2_STREAM_COLOR } },
+                                                    []() { return std::make_shared< uyvy_to_yuyv >(); } );
+            }
+            else
+            {
+                color_ep.register_processing_block(processing_block_factory::create_pbf_vector<yuy2_converter>(RS2_FORMAT_YUYV, map_supported_color_formats(RS2_FORMAT_YUYV), RS2_STREAM_COLOR));
+            }
+        }        
     }
 
     void d400_color::register_metadata_mipi(const synthetic_sensor &color_ep) const
@@ -239,13 +282,7 @@ namespace librealsense
         // attributes of md_mipi_rgb_control structure
         auto md_prop_offset = offsetof(metadata_mipi_rgb_raw, rgb_mode);
 
-        // to be checked
         color_ep.register_metadata(RS2_FRAME_METADATA_SENSOR_TIMESTAMP,
-                                       make_attribute_parser(&md_mipi_rgb_mode::hw_timestamp,
-                                                             md_mipi_rgb_control_attributes::hw_timestamp_attribute,
-                                                             md_prop_offset));
-
-        color_ep.register_metadata(RS2_FRAME_METADATA_FRAME_TIMESTAMP,
                                        make_attribute_parser(&md_mipi_rgb_mode::hw_timestamp,
                                                              md_mipi_rgb_control_attributes::hw_timestamp_attribute,
                                                              md_prop_offset));
@@ -284,7 +321,8 @@ namespace librealsense
         color_ep.register_metadata(RS2_FRAME_METADATA_AUTO_EXPOSURE,
                                        make_attribute_parser(&md_mipi_rgb_mode::auto_exposure_mode,
                                                              md_mipi_rgb_control_attributes::auto_exposure_mode_attribute,
-                                                             md_prop_offset));
+                                                             md_prop_offset,
+                                                             [](rs2_metadata_type param) { return (param != 1); })); // OFF value via UVC is 1 (ON is 8)
         color_ep.register_metadata(RS2_FRAME_METADATA_GAIN_LEVEL,
                                        make_attribute_parser(&md_mipi_rgb_mode::gain,
                                                              md_mipi_rgb_control_attributes::gain_attribute,

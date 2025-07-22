@@ -6,7 +6,6 @@
 #include <librealsense2/hpp/rs_processing.hpp>
 #include "option.h"
 #include "environment.h"
-#include "context.h"
 #include "software-device.h"
 #include "proc/synthetic-stream.h"
 #include "proc/hole-filling-filter.h"
@@ -54,7 +53,6 @@ namespace librealsense
                                                << "Unsupported mode for hole filling selected: value " << val
                                                << " is out of range." );
 
-            std::lock_guard<std::mutex> lock(_mutex);
             _hole_filling_mode = static_cast<uint8_t>(val);
         });
 

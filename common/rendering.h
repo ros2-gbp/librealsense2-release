@@ -59,7 +59,8 @@ namespace rs2
             : _counter(0),
             _delta(0),
             _last_timestamp(0),
-            _num_of_frames(0)
+            _num_of_frames(0),
+            _last_frame_counter(0)
         {}
 
         fps_calc(const fps_calc& other)
@@ -75,7 +76,7 @@ namespace rs2
             std::lock_guard<std::mutex> lock(_mtx);
             if (++_counter >= _skip_frames)
             {
-                if (_last_timestamp != 0)
+                if (_last_timestamp != 0 && frame_counter > _last_frame_counter)
                 {
                     _delta = timestamp - _last_timestamp;
                     _num_of_frames = frame_counter - _last_frame_counter;
@@ -90,7 +91,7 @@ namespace rs2
         double get_fps() const
         {
             std::lock_guard<std::mutex> lock(_mtx);
-            if (_delta == 0)
+            if (std::abs(_delta) < std::numeric_limits<double>::epsilon())
                 return 0;
 
             return (static_cast<double>(_numerator) * _num_of_frames) / _delta;
@@ -160,8 +161,8 @@ namespace rs2
             auto p2 = p[(i+1) % p.size()];
             if ((p2 - p1).length() < 1e-3) return false;
 
-            p1 = p1.normalize();
-            p2 = p2.normalize();
+            p1 = p1.normalized();
+            p2 = p2.normalized();
 
             angles.push_back(acos((p1 * p2) / sqrt(p1.length() * p2.length())));
         }
@@ -510,7 +511,7 @@ namespace rs2
                 case RS2_FORMAT_ANY:
                     throw std::runtime_error("not a valid format");
                 case RS2_FORMAT_Z16H:
-                    throw std::runtime_error("unexpected format: Z16H. Check decoder processing block");
+                    throw std::runtime_error("unexpected format: Z16H is deprecated! Check decoder processing block");
                 case RS2_FORMAT_Z16:
                 case RS2_FORMAT_DISPARITY16:
                 case RS2_FORMAT_DISPARITY32:
@@ -622,6 +623,18 @@ namespace rs2
                     {
                         throw std::runtime_error("Not expecting a frame with motion format that is not a motion_frame");
                     }
+                    break;
+                }
+                case RS2_FORMAT_COMBINED_MOTION:
+                {
+                    auto & motion = *reinterpret_cast< const rs2_combined_motion * >( frame.get_data() );
+                    draw_motion_data( (float)motion.linear_acceleration.x,
+                                      (float)motion.linear_acceleration.y,
+                                      (float)motion.linear_acceleration.z );
+                    draw_motion_data( (float)motion.angular_velocity.x,
+                                      (float)motion.angular_velocity.y,
+                                      (float)motion.angular_velocity.z,
+                                      false );  // Don't clear previous draw
                     break;
                 }
                 case RS2_FORMAT_Y16:
@@ -799,7 +812,7 @@ namespace rs2
             draw_text((int)(xy.x - w / 2), (int)xy.y, text);
         }
 
-        void draw_motion_data(float x, float y, float z)
+        void draw_motion_data(float x, float y, float z, bool clear=true)
         {
             glMatrixMode(GL_PROJECTION);
             glPushMatrix();
@@ -808,7 +821,8 @@ namespace rs2
 
             glViewport(0, 0, 768, 768);
             glClearColor(0, 0, 0, 1);
-            glClear(GL_COLOR_BUFFER_BIT);
+            if( clear )
+                glClear(GL_COLOR_BUFFER_BIT);
 
             glMatrixMode(GL_PROJECTION);
             glLoadIdentity();
@@ -823,11 +837,14 @@ namespace rs2
 
             glRotatef(-135, 0.0f, 1.0f, 0.0f);
 
-            draw_axes();
+            if( clear )
+            {
+                draw_axes();
 
-            draw_circle(1, 0, 0, 0, 1, 0);
-            draw_circle(0, 1, 0, 0, 0, 1);
-            draw_circle(1, 0, 0, 0, 0, 1);
+                draw_circle( 1, 0, 0, 0, 1, 0 );
+                draw_circle( 0, 1, 0, 0, 0, 1 );
+                draw_circle( 1, 0, 0, 0, 0, 1 );
+            }
 
             const auto canvas_size = 230;
             const auto vec_threshold = 0.2f;

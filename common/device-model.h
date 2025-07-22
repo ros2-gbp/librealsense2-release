@@ -1,17 +1,17 @@
 // License: Apache 2.0. See LICENSE file in root directory.
 // Copyright(c) 2023 Intel Corporation. All Rights Reserved.
-
 #pragma once
 
 #include <set>
 #include "notifications.h"
 #include "realsense-ui-advanced-mode.h"
-#include <json.hpp>
+#include <rsutils/json.h>
 #include "sw-update/dev-updates-profile.h"
 #include <rsutils/time/periodic-timer.h>
 #include "updates-model.h"
 #include "calibration-model.h"
 #include "objects-in-frame.h"
+#include "dds-model.h"
 
 ImVec4 from_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a, bool consistent_color = false);
 ImVec4 operator+(const ImVec4& c, float v);
@@ -62,7 +62,7 @@ inline ImVec4 blend(const ImVec4& c, float a)
 
 namespace rs2
 {
-    void imgui_easy_theming(ImFont*& font_14, ImFont*& font_18, ImFont*& monofont);
+    void imgui_easy_theming(ImFont*& font_dynamic, ImFont*& font_18, ImFont*& monofont, int& font_size);
 
     constexpr const char* server_versions_db_url = "https://librealsense.intel.com/Releases/rs_versions_db.json";
 
@@ -109,6 +109,11 @@ namespace rs2
         {
             static const char* enable_writing{ "calibration.enable_writing" };
         }
+        namespace dds
+        {
+            static const char* enable_dds{ "context.dds.enabled" };
+            static const char* domain_id{ "context.dds.domain" };
+        }
         namespace viewer
         {
             static const char* is_3d_view{ "viewer_model.is_3d_view" };
@@ -122,6 +127,7 @@ namespace rs2
             static const char* last_calib_notice{ "viewer_model.last_calib_notice" };
             static const char* is_measuring{ "viewer_model.is_measuring" };
             static const char* output_open{ "viewer_model.output_open" };
+            static const char* dashboard_open{ "viewer_model.dashboard_open" };
             static const char* search_term{ "viewer_model.search_term" };
 
             static const char* log_to_console{ "viewer_model.log_to_console" };
@@ -148,11 +154,12 @@ namespace rs2
             static const char* width{ "window.width" };
             static const char* height{ "window.height" };
             static const char* maximized{ "window.maximized" };
+            static const char* font_size{ "window.font_size" };
         }
         namespace performance
         {
             static const char* glsl_for_rendering{ "performance.glsl_for_rendering.v2" };
-            static const char* glsl_for_processing{ "performance.glsl_for_processing.v2" };
+            static const char* glsl_for_processing{ "performance.glsl_for_processing.v3" };
             static const char* enable_msaa{ "performance.msaa" };
             static const char* msaa_samples{ "performance.msaa_samples" };
             static const char* show_fps{ "performance.show_fps" };
@@ -367,6 +374,8 @@ namespace rs2
             viewer_model& viewer, std::string& error_message);
         void begin_update_unsigned(viewer_model& viewer, std::string& error_message);
         void check_for_device_updates(viewer_model& viewer, bool activated_by_user = false);
+        bool disable_record_button_logic(bool is_streaming, bool is_playback_device);
+        std::string get_record_button_hover_text(bool is_streaming);
 
 
         std::shared_ptr< atomic_objects_in_frame > get_detected_objects() const { return _detected_objects; }
@@ -424,7 +433,7 @@ namespace rs2
             const std::string& error_message);
 
         void load_viewer_configurations(const std::string& json_str);
-        void save_viewer_configurations(std::ofstream& outfile, nlohmann::json& j);
+        void save_viewer_configurations(std::ofstream& outfile, rsutils::json& j);
         void handle_online_sw_update(
             std::shared_ptr< notifications_model > nm,
             std::shared_ptr< sw_update::dev_updates_profile::update_profile > update_profile,
@@ -436,6 +445,10 @@ namespace rs2
             std::shared_ptr< sw_update::dev_updates_profile::update_profile > update_profile,
             bool reset_delay = false );
 
+        void draw_device_panel_auto_calib(viewer_model& viewer, bool& something_to_show, std::string& error_message);
+        bool draw_device_panel_auto_calib_d400(viewer_model& viewer, bool& something_to_show, std::string& error_message);
+        bool draw_device_panel_auto_calib_d500(viewer_model& viewer, bool& something_to_show, std::string& error_message);
+
         std::shared_ptr<recorder> _recorder;
         std::vector<std::shared_ptr<subdevice_model>> live_subdevices;
         rsutils::time::periodic_timer      _update_readonly_options_timer;
@@ -444,6 +457,7 @@ namespace rs2
         std::shared_ptr<updates_model> _updates;
         std::shared_ptr<sw_update::dev_updates_profile::update_profile >_updates_profile;
         calibration_model _calib_model;
+        dds_model _dds_model;
     };
 
     std::pair<std::string, std::string> get_device_name(const device& dev);

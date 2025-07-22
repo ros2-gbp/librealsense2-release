@@ -29,6 +29,7 @@ void init_device(py::module &m) {
         .def(py::init<>())
         .def("__nonzero__", &rs2::device::operator bool) // Called to implement truth value testing in Python 2
         .def("__bool__", &rs2::device::operator bool) // Called to implement truth value testing in Python 3
+        .def( "is_connected", &rs2::device::is_connected )
         .def(BIND_DOWNCAST(device, debug_protocol))
         .def(BIND_DOWNCAST(device, playback))
         .def(BIND_DOWNCAST(device, recorder))
@@ -40,7 +41,10 @@ void init_device(py::module &m) {
         .def(BIND_DOWNCAST(device, firmware_logger))
         .def("__repr__", [](const rs2::device &self) {
             std::ostringstream ss;
-            ss << "<" SNAME ".device: " << self.get_info(RS2_CAMERA_INFO_NAME);
+            auto name = self.get_info( RS2_CAMERA_INFO_NAME );
+            if( 0 == strncmp( name, "Intel RealSense ", 16 ) )
+                name += 16;
+            ss << "<" SNAME ".device: " << name;
             if (self.supports(RS2_CAMERA_INFO_SERIAL_NUMBER))
                 ss << " (S/N: " << self.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
             else
@@ -50,8 +54,18 @@ void init_device(py::module &m) {
             if( self.supports( RS2_CAMERA_INFO_CAMERA_LOCKED )
                 && strcmp( "YES", self.get_info( RS2_CAMERA_INFO_CAMERA_LOCKED ) ) )
                 ss << "  UNLOCKED";
-            if( self.supports( RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR ) )
-                ss << "  on USB" << self.get_info( RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR );
+            if (self.supports(RS2_CAMERA_INFO_CONNECTION_TYPE))
+            {
+                auto connection_type = self.get_info(RS2_CAMERA_INFO_CONNECTION_TYPE);
+                ss << "  on ";
+                ss << connection_type;
+                if (connection_type == "USB")
+                    if (self.supports(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR))
+                        ss << self.get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR);
+            }
+            
+            else if( self.supports( RS2_CAMERA_INFO_PHYSICAL_PORT ) )
+                ss << "  @ " << self.get_info( RS2_CAMERA_INFO_PHYSICAL_PORT );
             ss << ")>";
             return ss.str();
         })
@@ -184,7 +198,9 @@ void init_device(py::module &m) {
             "queue1"_a, "queue2"_a, "queue3"_a, "target_width_mm"_a, "target_height_mm"_a, "callback"_a, py::call_guard<py::gil_scoped_release>())
         .def("get_calibration_table", &rs2::auto_calibrated_device::get_calibration_table, "Read current calibration table from flash.")
         .def("set_calibration_table", &rs2::auto_calibrated_device::set_calibration_table, "Set current table to dynamic area.")
-        .def("reset_to_factory_calibration", &rs2::auto_calibrated_device::reset_to_factory_calibration, "Reset device to factory calibration.");
+        .def("reset_to_factory_calibration", &rs2::auto_calibrated_device::reset_to_factory_calibration, "Reset device to factory calibration.")
+        .def("get_calibration_config", &rs2::auto_calibrated_device::get_calibration_config, "Get Calibration Config Table", py::call_guard<py::gil_scoped_release>())
+        .def("set_calibration_config", &rs2::auto_calibrated_device::set_calibration_config, "Set Calibration Config Table", "calibration_config_json_str"_a, py::call_guard<py::gil_scoped_release>());
 
     py::class_<rs2::device_calibration, rs2::device> device_calibration( m, "device_calibration" );
     device_calibration.def( py::init<rs2::device>(), "device"_a )
