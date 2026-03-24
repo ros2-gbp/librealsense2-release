@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2017 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2017 RealSense, Inc. All Rights Reserved.
 #ifdef _MSC_VER
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -58,8 +58,20 @@ namespace rs2
         return str;
     }
 
+    bool is_valid_url( const std::string & url )
+    {
+        static const std::regex url_regex( R"(^(https?):\/\/([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/[^\s]*)?$)",
+                                           std::regex::icase );
+
+        return std::regex_match( url, url_regex );
+    }
+
     void open_url(const char* url)
     {
+        if( url && !is_valid_url( url ) )
+        {
+            throw std::invalid_argument( "The URL provided is not valid: " + std::string( url ) );
+        }
 #if (defined(_WIN32) || defined(_WIN64))
         if (reinterpret_cast<INT_PTR>(ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOW)) < 32)
             throw std::runtime_error("Failed opening URL");
@@ -201,13 +213,13 @@ Some auxillary functionalities might be affected. Please report this message if 
 
         if (filters_split.size() >= 1)
         {
-            filters_count = int( filters_split.size() - 1 );
+            filters_count = static_cast<int>( filters_split.size() - 1 );
 
             // set description
             aSingleFilterDescription = filters_split[0].c_str();
 
             // fill filter pattern with extensions
-            for (int i = 1; i < filters_split.size(); ++i)
+            for(int i = 1; i < filters_split.size(); ++i)
             {
                 filter.push_back(filters_split[i].c_str());
             }
