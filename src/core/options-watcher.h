@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2024 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2024 RealSense, Inc. All Rights Reserved.
 #pragma once
 
 #include <librealsense2/h/rs_option.h>
@@ -47,6 +47,10 @@ public:
 
     void set_update_interval( std::chrono::milliseconds update_interval ) { _update_interval = update_interval; }
 
+    inline void pause() { _paused.store(true); }
+    inline void unpause() { _paused.store(false);
+                          _stopping.notify_all();}
+
 protected:
     bool should_start() const;
     bool should_stop() const;
@@ -63,6 +67,7 @@ protected:
     std::mutex _mutex;
     std::condition_variable _stopping;
     std::atomic_bool _destructing;
+    std::atomic_bool _paused;
 };
 
 

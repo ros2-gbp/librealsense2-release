@@ -1,7 +1,8 @@
 # License: Apache 2.0. See LICENSE file in root directory.
-# Copyright(c) 2021 Intel Corporation. All Rights Reserved.
+# Copyright(c) 2021 RealSense, Inc. All Rights Reserved.
 
 # test:device each(D400*)
+# test:device each(D500*) 
 
 
 import pyrealsense2 as rs
@@ -19,15 +20,19 @@ import platform
 # Set maximum delay for first frame according to product line
 dev, ctx = test.find_first_device_or_exit()
 
-# The device starts at D0 (Operational) state, allow time for it to get into idle state
-time.sleep( 3 )
+# The device power up at D0 (Operational) state, allow time for it to get into idle state
+# Note, it goes back to idle after streaming ends, no need to sleep between depth and color streaming.
+time.sleep(3)
 
 product_line = dev.get_info(rs.camera_info.product_line)
 if product_line == "D400":
     max_delay_for_depth_frame = 1
     max_delay_for_color_frame = 1
+elif product_line == "D500":
+    max_delay_for_depth_frame = 1
+    max_delay_for_color_frame = 1
 else:
-    log.f("This test support only D400 devices")
+    log.f("Not supported product line " + product_line)
 
 
 def time_to_first_frame(config):
