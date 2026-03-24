@@ -1,3 +1,26 @@
+## librealsense2 (kilted) - 2.57.7-1
+
+The packages in the `librealsense2` repository were released into the `kilted` distro by running `/home/administrator/.local/bin/bloom-release --ros-distro kilted --track kilted librealsense2 --edit` on `Tue, 24 Mar 2026 12:48:01 -0000`
+
+The `librealsense2` package was released.
+
+Version of package(s) in repository `librealsense2`:
+
+- upstream repository: https://github.com/realsenseai/librealsense.git
+- release repository: https://github.com/ros2-gbp/librealsense2-release.git
+- rosdistro version: `2.56.4-1`
+- old version: `2.56.4-1`
+- new version: `2.57.7-1`
+
+Versions of tools used:
+
+- bloom version: `0.13.0`
+- catkin_pkg version: `0.4.24`
+- rosdep version: `0.21.0`
+- rosdistro version: `0.8.3`
+- vcstools version: `0.1.42`
+
+
 ## librealsense2 (jazzy) - 2.57.7-1
 
 The packages in the `librealsense2` repository were released into the `jazzy` distro by running `/home/administrator/.local/bin/bloom-release --ros-distro jazzy --track jazzy librealsense2 --edit` on `Tue, 24 Mar 2026 12:12:06 -0000`
