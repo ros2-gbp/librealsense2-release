@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2015 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2015 RealSense, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -75,7 +75,10 @@ namespace librealsense
             return strong_uvc->invoke_powered([&] ( platform::uvc_device & dev )
                 {
                     std::lock_guard<platform::uvc_device> lock(dev);
-                    return _command_transfer->send_receive(pb, cb, timeout_ms, require_response);
+                    if (_command_transfer)
+                        return _command_transfer->send_receive(pb, cb, timeout_ms, require_response);
+                    else
+                        throw std::runtime_error("command_transfer data member NULL - objet must have been destroyed");
                 });
         }
 

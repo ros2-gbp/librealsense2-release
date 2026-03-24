@@ -1,10 +1,10 @@
 # License: Apache 2.0. See LICENSE file in root directory.
-# Copyright(c) 2023-4 Intel Corporation. All Rights Reserved.
+# Copyright(c) 2023-4 RealSense, Inc. All Rights Reserved.
 
 #test:donotrun:!dds
 #test:retries 2
 
-from rspy import log, test
+from rspy import log, test, config_file
 from rspy import librs as rs
 
 if log.is_debug_on():
@@ -14,7 +14,7 @@ log.nested = 'C  '
 context = rs.context( {
     'dds': {
         'enabled': True,
-        'domain': 123,
+        'domain': config_file.get_domain_from_config_file_or_default(),
         'participant': 'test-formats-conversion'
         },
     'device-mask': rs.only_sw_devices

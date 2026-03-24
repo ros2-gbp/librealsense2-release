@@ -1,10 +1,10 @@
 # License: Apache 2.0. See LICENSE file in root directory.
-# Copyright(c) 2024 Intel Corporation. All Rights Reserved.
+# Copyright(c) 2024 RealSense, Inc. All Rights Reserved.
 
 #test:donotrun:!dds
 #test:retries 2
 
-from rspy import log, test
+from rspy import log, test, config_file
 with test.remote.fork( nested_indent=None ) as remote:
     if remote is None:  # we're the fork
         import pyrealdds as dds
@@ -12,7 +12,7 @@ with test.remote.fork( nested_indent=None ) as remote:
 
         with test.closure( 'Start the server participant' ):
             participant = dds.participant()
-            participant.init( 123, 'server' )
+            participant.init( config_file.get_domain_from_config_file_or_default(), 'server' )
 
         with test.closure( 'Create the server' ):
             device_info = dds.message.device_info.from_json({
@@ -32,8 +32,11 @@ with test.remote.fork( nested_indent=None ) as remote:
                 dds.option.from_json( ['R/O Option', 'Value', 'Read-only string option'] ),
                 dds.option.from_json( ['Visual Preset', 'Default', ['Default','Preset-1','Preset-2'], 'Default', 'Should enable serialization'] )
                 ] )
+            s2 = dds.depth_stream_server( 's2', 'depth' ) # Depth sensor is expected
+            s2.init_profiles( [dds.video_stream_profile( 1, dds.video_encoding.z16, 10, 10 )], 0 )
+            s2.init_options( [] )
             server = dds.device_server( participant, device_info.topic_root )
-            server.init( [s1], [], {} )
+            server.init( [s1, s2], [], {} )
 
         with test.closure( 'Set up a handler to keep track of the change order' ):
             def _on_set_option( server, option, value ):
@@ -54,14 +57,14 @@ with test.remote.fork( nested_indent=None ) as remote:
         rs.log_to_console( rs.log_severity.debug )
 
     with test.closure( 'Initialize librealsense context', on_fail=test.ABORT ):
-        context = rs.context( { 'dds': { 'enabled': True, 'domain': 123, 'participant': 'client' }} )
+        context = rs.context( { 'dds': { 'enabled': True, 'domain': config_file.get_domain_from_config_file_or_default(), 'participant': 'client' }} )
 
     with test.closure( 'Find the server', on_fail=test.ABORT ):
         dev = rs.wait_for_devices( context, rs.only_sw_devices, n=1. )
         for s in dev.query_sensors():
             break
         options = test.info( "supported options", s.get_supported_options() )
-        test.check_equal( len(options), 7 )  # 'Frames Queue Size' gets added to all sensors!!?!?!
+        test.check_equal( len(options), 8 )  # 'Frames Queue Size' and 'Global Time Enabled' gets added by SDK
 
     with test.closure( 'Play with integer option' ):
         io = next( o for o in options if str(o) == 'Integer Option' )
@@ -123,33 +126,7 @@ with test.remote.fork( nested_indent=None ) as remote:
             s.set_option_value( ro, 'Blah' ),
             RuntimeError, 'option is read-only: R/O Option' )
 
-    with test.closure( 'Check serialization through serialized_device' ):
-        sdev = rs.serializable_device( dev )
-        test.check( sdev, on_fail=test.RAISE )
-        import json
-        j = json.loads( sdev.serialize_json() )
-        test.info( "serialize_json()", j )
-        params = j.get( 'parameters', [] )
-        test.check_equal( len( params ), 5 )  # Without FRAMES_QUEUE_SIZE
-        test.check_equal( params.get( 'sensor/Boolean Option' ), True )
-
-        # Confirm previous value was set
-        bv = s.get_option_value( bo )
-        test.check_equal( bv.type, rs.option_type.boolean )
-        test.check_equal( bv.value, True )
-        test.check_equal( s.get_option( bo ), 1. )
-
-        # Change using load_json() and verify
-        params.update({ 'sensor/Boolean Option': False })
-        log.d( f'updated json: {j}' )
-        remote.capture_stdout()
-        sdev.load_json( json.dumps( j ) )
-        rv = remote.get_stdout()
-        test.check_equal( s.get_option( bo ), 0. )
-        test.info( "option change order", rv )
-        test.check_equal( len(rv), 5 )              # all options should have been changed
-        test.check_equal( rv[0], 'Visual Preset' )  # but Visual Preset should always update first
-        del sdev
+    # Serialization of DDS devices now implemented using advanced_mode interface, tested under live-options-presets UT
 
     with test.closure( 'All done' ):
         del dev
