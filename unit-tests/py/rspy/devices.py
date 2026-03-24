@@ -1,5 +1,5 @@
 # License: Apache 2.0. See LICENSE file in root directory.
-# Copyright(c) 2024 Intel Corporation. All Rights Reserved.
+# Copyright(c) 2024 RealSense, Inc. All Rights Reserved.
 
 import sys, os, re, platform
 from time import perf_counter as timestamp
@@ -35,7 +35,7 @@ from rspy import repo
 pyrs_dir = repo.find_pyrs_dir()
 sys.path.insert( 1, pyrs_dir )
 
-MAX_ENUMERATION_TIME = 17  # [sec]
+MAX_ENUMERATION_TIME = 20  # [sec]
 
 # We need both pyrealsense2 and hub. We can work without hub, but
 # without pyrealsense2 no devices at all will be returned.
@@ -79,25 +79,28 @@ class Device:
             log.w("connection_type is not supported! Assuming not a dds device")
             self._is_dds = False
 
-        self._usb_location = None
+        self._location = None  # might be either usb location or mac address
         try:
-            self._usb_location = _get_usb_location(self._physical_port)
+            if self._is_dds:
+                self._location = _get_mac_address(dev)
+            elif self._connection_type == "USB":
+                self._location = _get_usb_location(self._physical_port)
+            elif self._connection_type == "GMSL":
+                # GMSL device
+                log.i("GMSL device detected, no location available")
+            else:
+                raise Exception(f"Unknown connection type: {self._connection_type}")
         except Exception as e:
-            log.e('Failed to get usb location:', e)
-
-        self._mac_address = get_mac_address(dev, self._is_dds)
+            log.e('Failed to get usb location / mac address:', e)
 
         self._port = None
         if hub:
             try:
-                if self._is_dds:
-                    self._port = hub.get_port_by_location(self._mac_address)
-                else:
-                    self._port = hub.get_port_by_location(self._usb_location)
+                self._port = hub.get_port_by_location(self._location)
             except Exception as e:
                 log.e('Failed to get device port:', e)
                 log.d('    physical port is', self._physical_port)
-                log.d('    location is', self._mac_address if self._is_dds else self._usb_location)
+                log.d('    location is', self._location)
 
         self._removed = False
 
@@ -112,6 +115,10 @@ class Device:
     @property
     def product_line( self ):
         return self._product_line
+
+    @property
+    def connection_type( self ):
+        return self._connection_type
 
     @property
     def physical_port( self ):
@@ -192,9 +199,12 @@ def map_unknown_ports():
             log.d( 'enabling port', port )
             hub.enable_ports( [port], disable_other_ports=True )
             sn = None
+            port_enable_time = timestamp()
             for retry in range( MAX_ENUMERATION_TIME ):
                 if len( enabled() ) == 1:
                     sn = list( enabled() )[0]
+                    detection_time = timestamp() - port_enable_time
+                    log.d( f"Device {sn} detected on port {port} after {detection_time:.2f} seconds" )
                     break
                 time.sleep( 1 )
             if not sn:
@@ -217,7 +227,7 @@ def map_unknown_ports():
         log.debug_unindent()
 
 
-def query( monitor_changes=True, hub_reset=False, recycle_ports=True, disable_dds=True ):
+def query( monitor_changes=True, hub_reset=False, recycle_ports=True, disable_dds=True, rslog=False ):
     """
     Start a new LRS context, and collect all devices
     :param monitor_changes: If True, devices will update dynamically as they are removed/added
@@ -237,42 +247,65 @@ def query( monitor_changes=True, hub_reset=False, recycle_ports=True, disable_dd
             hub.connect(hub_reset)
         if recycle_ports:
             hub.disable_ports( sleep_on_change = 5 )
-            hub.enable_ports( sleep_on_change = MAX_ENUMERATION_TIME )
+            hub.enable_ports()  # Enable without sleeping - we'll poll ourselves
     #
     # Get all devices, and store by serial-number
     global _device_by_sn, _context, _port_to_sn
-    settings = {}
+    settings = {'dds' : { 'enabled' : True }}  # explicitly enable dds in case there's an issue with the config file
     if disable_dds:
-        settings['dds'] = { 'enabled': False }
+        settings['dds']['enabled'] = False
+    
+    if rslog:
+        rs.log_to_console(rs.log_severity.debug) # Enable context debug logging to see device removal/addition
+        
     _context = rs.context( settings )
     _device_by_sn = dict()
+    detected_sns = set()
+
+    log.debug_indent()
+
+    # Wait for devices appearing to enumerate
+    wait_time = MAX_ENUMERATION_TIME if hub else 1 # When no hub connected we can assume the device is connected and powered
+    time.sleep( wait_time )
+
+    d555_found = False
     try:
-        log.debug_indent()
-        for retry in range(3):
-            try:
-                devices = _context.query_devices()
-                break
-            except RuntimeError as e:
-                log.d( 'FAILED to query devices:', e )
-                if retry > 1:
-                    log.e( 'FAILED to query devices', retry + 1, 'times!' )
-                    raise
-                else:
-                    time.sleep( 1 )
+        devices = _context.query_devices()
         for dev in devices:
-            # The FW update ID is always available, it seems, and is the ASIC serial number
-            # whereas the Serial Number is the OPTIC serial number and is only available in
-            # non-recovery devices. So we use the former...
             try:
                 sn = dev.get_info( rs.camera_info.firmware_update_id )
             except RuntimeError as e:
-                log.e( f'Found device with S/N {sn} but trying to get fw-update-id failed: {e}' )
+                log.e( f'Found device but trying to get fw-update-id failed: {e}' )
                 continue
-            device = Device( sn, dev )
-            _device_by_sn[sn] = device
-            log.d( '... port {}:'.format( device.port is None and '?' or device.port ), sn, dev )
-    finally:
-        log.debug_unindent()
+
+            if sn not in detected_sns:
+                # New device detected
+                detected_sns.add(sn)
+                device = Device( sn, dev )
+                _device_by_sn[sn] = device
+                log.d( '... port {}:'.format( device.port is None and '?' or device.port ), sn, dev, 'detected and added to devices list' )
+
+                name = dev.get_info(rs.camera_info.name) if dev.supports(rs.camera_info.name) else ""
+                d555_found = "D555" in name        
+    except RuntimeError as e:
+        log.d( 'FAILED to query devices:', e )
+
+    if hub and not d555_found:
+        # All CI machines with a D555 connected have a hub. Detect camera even in case domain have reset to 0 so applicable tests will run.
+        ctx = rs.context( { "dds" : { "enabled" : True, "domain" : 0 } } )
+        devices = ctx.query_devices(int(rs.product_line.sw_only) | int(rs.product_line.any))
+        for dev in devices:
+            name = dev.get_info(rs.camera_info.name) if dev.supports(rs.camera_info.name) else ""
+            if "D555" in name:
+                log.i("Found D555 device with domain 0, not same as in configuration file")
+                sn = dev.get_info( rs.camera_info.firmware_update_id ) # Supported by D555 devices
+                device = Device( sn, dev )
+                _device_by_sn[sn] = device
+
+    if rslog:
+        rs.log_to_console(rs.log_severity.none) # disable debug logging
+
+    log.debug_unindent()
     #
     if monitor_changes:
         _context.set_devices_changed_callback( _device_change_callback )
@@ -292,13 +325,21 @@ def _device_change_callback( info ):
         log.d( 'device added:', sn, handle )
         if sn in _device_by_sn:
             device = _device_by_sn[sn]
-            device._dev = handle     # Because it has a new handle!
-            device._removed = False
+            # Check if connection type changed (e.g., USB -> DDS)
+            old_connection_type = device._connection_type
+            new_connection_type = handle.supports(rs.camera_info.connection_type) and handle.get_info(rs.camera_info.connection_type) or None
+            if new_connection_type and new_connection_type != old_connection_type:
+                # Device reappeared with different connection type (e.g., USB camera now exposed via DDS adapter)
+                # This is likely a test artifact - don't replace the physical device with the virtual one
+                log.d( f'ignoring device {sn} with changed connection type: {old_connection_type} -> {new_connection_type}' )
+            else:
+                # Same connection type, just update the handle (device was recycled/reset)
+                device._dev = handle
+                device._removed = False
         else:
-            # shouldn't see new devices...
-            log.d( 'new device detected!?' )
-            _device_by_sn[sn] = Device( sn, handle )
-
+            # New device not in initial map - ignore it
+            # Could be DDS simulated devices created during tests
+            continue
 
 def all():
     """
@@ -512,7 +553,7 @@ def recovery():
     :return: A set of all device serial-numbers that are in recovery mode
     """
     global _device_by_sn
-    return { device.serial_number for device in _device_by_sn.values() if device.handle.is_update_device() }
+    return { device.serial_number for device in _device_by_sn.values() if device.handle.is_in_recovery_mode() }
 
 
 def enable_only( serial_numbers, recycle = False, timeout = MAX_ENUMERATION_TIME ):
@@ -533,20 +574,30 @@ def enable_only( serial_numbers, recycle = False, timeout = MAX_ENUMERATION_TIME
     if hub:
         #
         ports = [ get( sn ).port for sn in serial_numbers ]
+        # DDS (and other non-hub) devices have port=None; filter them out of hub operations
+        hub_ports = [ p for p in ports if p is not None ]
         #
         if recycle:
             #
-            log.d( 'recycling ports via hub:', ports )
-            #
-            enabled_devices = enabled()
-            hub.disable_ports( )
-            _wait_until_removed( enabled_devices, timeout = timeout )
-            #
-            hub.enable_ports( ports )
+            if hub_ports:
+                # Only recycle if there are actual hub devices to manage
+                log.d( 'recycling ports via hub:', ports )
+                #
+                # Only wait for removal of devices that are actually on hub ports (exclude DDS devices)
+                enabled_devices = { sn for sn in enabled() if get( sn ).port is not None }
+                hub.disable_ports( )
+                _wait_until_removed( enabled_devices, timeout = timeout )
+                #
+                hub.enable_ports( hub_ports )
+            else:
+                log.d( 'no hub ports to recycle; leaving hub as-is' )
             #
         else:
             #
-            hub.enable_ports( ports, disable_other_ports = True )
+            if hub_ports:
+                hub.enable_ports( hub_ports, disable_other_ports = True )
+            else:
+                log.d( 'no hub ports to enable; leaving hub as-is' )
         #
         _wait_for( serial_numbers, timeout = timeout )
         #
@@ -720,15 +771,12 @@ else:
         return port_location
 
 
-def get_mac_address(dev, is_dds):
-    if not is_dds:
-        return None
-
+def _get_mac_address(dev):
     GET_ETH_CONFIG_OPCODE = 187
     raw_command = rs.debug_protocol(dev).build_command(GET_ETH_CONFIG_OPCODE,1)
     raw_result = rs.debug_protocol(dev).send_and_receive_raw_data(raw_command)
     if raw_result[0] == GET_ETH_CONFIG_OPCODE: # success
-        return ":".join([hex(num)[2:] for num in raw_result[52:58]]) # bytes for the MAC address
+        return ":".join([f"{num:02x}" for num in raw_result[52:58]]) # bytes for the MAC address
 
     return None
 

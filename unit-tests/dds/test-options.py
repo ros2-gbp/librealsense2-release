@@ -1,11 +1,11 @@
 # License: Apache 2.0. See LICENSE file in root directory.
-# Copyright(c) 2024 Intel Corporation. All Rights Reserved.
+# Copyright(c) 2024 RealSense, Inc. All Rights Reserved.
 
 #test:donotrun:!dds
 #test:retries 2
 
 import pyrealdds as dds
-from rspy import log, test
+from rspy import log, test, config_file
 
 info = dds.message.device_info()
 info.name = "Test Device"
@@ -17,7 +17,7 @@ with test.remote.fork( nested_indent=None ) as remote:
         dds.debug( log.is_debug_on(), log.nested )
 
         participant = dds.participant()
-        participant.init( 123, "server" )
+        participant.init( config_file.get_domain_from_config_file_or_default(), "server" )
 
 
         def test_no_options():
@@ -104,7 +104,7 @@ with test.remote.fork( nested_indent=None ) as remote:
     log.nested = 'C  '
 
     participant = dds.participant()
-    participant.init( 123, "test-options" )
+    participant.init( config_file.get_domain_from_config_file_or_default(), "test-options" )
 
 
     #############################################################################################
