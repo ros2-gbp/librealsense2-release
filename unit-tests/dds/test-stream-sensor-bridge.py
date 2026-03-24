@@ -1,15 +1,15 @@
 # License: Apache 2.0. See LICENSE file in root directory.
-# Copyright(c) 2023 Intel Corporation. All Rights Reserved.
+# Copyright(c) 2023 RealSense, Inc. All Rights Reserved.
 
 #test:donotrun:!dds
 
 import pyrealdds as dds
-from rspy import log, test
+from rspy import log, test, config_file
 dds.debug( log.is_debug_on() )
 from time import sleep
 
 participant = dds.participant()
-participant.init( 123, "test-stream-sensor-bridge" )
+participant.init( config_file.get_domain_from_config_file_or_default(), "test-stream-sensor-bridge" )
 
 # set up a server device with a bridge
 import d435i
