@@ -97,7 +97,7 @@ if [ ! -d ${kernel_name} ]; then
 	mkdir ${kernel_name}
 	cd ${kernel_name}
 	git init
-	git remote add origin https://kernel.ubuntu.com/ubuntu/ubuntu-${ubuntu_codename}.git
+	git remote add origin https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/${ubuntu_codename}
 	cd ..
 fi
 
@@ -187,7 +187,7 @@ then
 
 	# Basic build for kernel modules
 	echo -e "\e[32mPrepare kernel modules configuration\e[0m"
-	#Retpoline script manual retrieval. based on https://github.com/IntelRealSense/librealsense/issues/1493
+	#Retpoline script manual retrieval. based on https://github.com/realsenseai/librealsense/issues/1493
 	#Required since the retpoline patches were introduced into Ubuntu kernels
 	if [ ! -f scripts/ubuntu-retpoline-extract-one ]; then
 		pwd
