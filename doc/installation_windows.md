@@ -2,7 +2,7 @@
 
 **Note:** Due to the USB 3.0 translation layer between native hardware and virtual machine, the librealsense team does not recommend or support installation in a VM.
 
-librealsense shall be built on Windows using [CMake v3.8+](https://cmake.org/download/) and Visual Studio 2017 / 2019 / 2022: 
+librealsense shall be built on Windows using [CMake v3.10+](https://cmake.org/download/) and Visual Studio >= 2019: 
 (MSVC2015 and older are not fully compatible with the C++14 feature-set).
 
 ![Windows CMake](./img/windows_cmake.png)
@@ -39,9 +39,9 @@ Prerequisites:
   - Run the following: 
     `PS > .\realsense_metadata_win10.ps1 <optional:operation>` 
     The supported parameters are
-    - `-op install` adds registry keys for connected Intel Realsense devices
+    - `-op install` adds registry keys for connected Realsense devices
     - `-op install_all` adds keys for all RealSense devices logged in the registry
-    - `-op remove` removes registry keys for connected Intel Realsense devices
+    - `-op remove` removes registry keys for connected Realsense devices
     - `-op remove_all` removes the keys for all RealSense devices logged in the registry
     Running the script without arguments will is similar to `-op install` operation. 
 
@@ -55,10 +55,10 @@ loaded because running scripts is disabled on this system` message, run:
 
   ###### Modifying the registry manually
   In case the script cannot be executed due to permissions, or other Host-related issue please follow the instructions to  update the registry manually:
-  - Connect Intel® RealSense™ device to the host
+  - Connect RealSense™ device to the host
   - Navigate to "Control Panel" -> "Device Manager"
-  - Browse for Intel® RealSense™ devices
-  - Select the first device from the list, e.g. `Intel® RealSense™ Camera D415 Depth` (Step 1)
+  - Browse for RealSense™ devices
+  - Select the first device from the list, e.g. `RealSense™ Camera D415 Depth` (Step 1)
   - Find device's path (Step 2) and the additional interfaces (Step 3)
 
     ![win_dev_master_interface](./img/win_device_interface.png)
@@ -76,7 +76,7 @@ loaded because running scripts is disabled on this system` message, run:
 
     - Repeat the previous step for
       `HKLM\SYSTEM\CurrentControlSet\Control\DeviceClasses\{65E8773D-8F56-11D0-A3B9-00A0C9223196}` branch
-- Repeat the procedure for all the additional RealSense devices (e.g. `Intel® RealSense™ Camera D415 RGB`)
+- Repeat the procedure for all the additional RealSense devices (e.g. `RealSense™ Camera D415 RGB`)
 
 #### Compiling Librealsense with Metadata support:
 During compilation the library will automatically detect and enable/disable metadata functionality according to the WinSDK version selected.
