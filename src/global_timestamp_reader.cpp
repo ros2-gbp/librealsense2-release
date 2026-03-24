@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2015 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2015 RealSense, Inc. All Rights Reserved.
 #include "global_timestamp_reader.h"
 #include <chrono>
 
@@ -139,7 +139,7 @@ namespace librealsense
     // so that the global timestamp can be correctly computed
     bool CLinearCoefficients::update_samples_base(double x)
     {
-        static const double max_device_time(pow(2, 32) * TIMESTAMP_USEC_TO_MSEC);
+        static const double max_device_time(pow(2, 32) * MICROSEC_TO_MILLISEC);
         double base_x;
         if (_last_values.empty())
             return false;

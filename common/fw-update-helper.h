@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2017 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2017-2025 RealSense, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -30,10 +30,13 @@ namespace rs2
     protected:
         void process_flow(std::function<void()> cleanup,
             invoker invoke) override;
-        void process_mipi();
+        void process_mipi_signed_fw();
         bool check_for(
             std::function<bool()> action, std::function<void()> cleanup,
             std::chrono::system_clock::duration delta);
+
+        void backup_firmware(updatable& upd, int& next_progress, const std::string& serial);
+        void switch_device_to_recovery_mode(updatable& upd, const std::string& serial, update_device& dfu, std::function<void()> cleanup);
 
         std::weak_ptr<notifications_model> _not_model;
         device _dev;
