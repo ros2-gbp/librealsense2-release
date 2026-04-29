@@ -1,1 +1,1 @@
-{"base": "587f20eeb3ca", "parent": "debian/rolling/librealsense2", "previous": "18100ea97444", "trim": "", "trimbase": ""}
+{"base": "dcc7e705", "parent": "debian/lyrical/librealsense2", "previous": "0c4455d2", "trim": "", "trimbase": ""}
