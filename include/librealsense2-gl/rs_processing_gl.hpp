@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2017 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2017 RealSense, Inc. All Rights Reserved.
 
 #ifndef LIBREALSENSE_RS2_PROCESSING_GL_HPP
 #define LIBREALSENSE_RS2_PROCESSING_GL_HPP
@@ -133,6 +133,53 @@ namespace rs2
 
                 // Redirect options API to the processing block
                 //options::operator=(pb);
+
+                return block;
+            }
+        };
+
+        /**
+        * m420_decoder can be used for M420->RGB conversion
+        * Similar in functionality to rs2::m420_decoder but performed on the GPU
+        */
+        class m420_decoder : public rs2::m420_decoder
+        {
+        public:
+            m420_decoder() : rs2::m420_decoder(init()) { }
+
+        private:
+            std::shared_ptr<rs2_processing_block> init()
+            {
+                rs2_error* e = nullptr;
+                auto block = std::shared_ptr<rs2_processing_block>(
+                    rs2_gl_create_m420_decoder(RS2_API_VERSION, &e),
+                    rs2_delete_processing_block);
+                error::handle(e);
+
+                // Redirect options API to the processing block
+                //options::operator=(pb);
+
+                return block;
+            }
+        };
+
+        /**
+        * nv12_decoder can be used for NV12->RGB conversion
+        * Similar in functionality to rs2::nv12_decoder but performed on the GPU
+        */
+        class nv12_decoder : public rs2::nv12_decoder
+        {
+        public:
+            nv12_decoder() : rs2::nv12_decoder(init()) { }
+
+        private:
+            std::shared_ptr<rs2_processing_block> init()
+            {
+                rs2_error* e = nullptr;
+                auto block = std::shared_ptr<rs2_processing_block>(
+                    rs2_gl_create_nv12_decoder(RS2_API_VERSION, &e),
+                    rs2_delete_processing_block);
+                error::handle(e);
 
                 return block;
             }

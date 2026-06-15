@@ -1,5 +1,5 @@
 /* License: Apache 2.0. See LICENSE file in root directory.
-   Copyright(c) 2017 Intel Corporation. All Rights Reserved. */
+   Copyright(c) 2017 RealSense, Inc. All Rights Reserved. */
 
 /** \file rs_types.h
 * \brief
@@ -12,6 +12,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
 
 /** \brief Category of the librealsense notification. */
 typedef enum rs2_notification_category{
@@ -67,38 +69,6 @@ typedef struct rs2_intrinsics
     float         coeffs[5]; /**< Distortion coefficients. Order for Brown-Conrady: [k1, k2, p1, p2, k3]. Order for F-Theta Fish-eye: [k1, k2, k3, k4, 0]. Other models are subject to their own interpretations */
 } rs2_intrinsics;
 
-/** \brief Video DSM (Digital Sync Module) parameters for calibration (same layout as in FW ac_depth_params)
-    This is the block in MC that converts angles to dimensionless integers reported to MA (using "DSM coefficients").
-*/
-#pragma pack( push, 1 )
-    typedef struct rs2_dsm_params
-    {
-        unsigned long long timestamp;               /**< system_clock::time_point::time_since_epoch().count() */
-        unsigned short version;                     /**< MAJOR<<12 | MINOR<<4 | PATCH */
-        unsigned char model;                        /**< rs2_dsm_correction_model */
-        unsigned char flags[5];                     /**< TBD, now 0s */
-        float h_scale;                              /**< the scale factor to horizontal DSM scale thermal results */
-        float v_scale;                              /**< the scale factor to vertical DSM scale thermal results */
-        float h_offset;                             /**< the offset to horizontal DSM offset thermal results */
-        float v_offset;                             /**< the offset to vertical DSM offset thermal results */
-        float rtd_offset;                           /**< the offset to the Round-Trip-Distance delay thermal results */
-        unsigned char temp_x2;                      /**< the temperature recorded times 2 (ldd for depth; hum for rgb) */
-        float mc_h_scale;                           /**< the scale factor to horizontal LOS coefficients in MC */
-        float mc_v_scale;                           /**< the scale factor to vertical LOS coefficients in MC */
-        unsigned char weeks_since_calibration;      /**< time (in weeks) since factory calibration */
-        unsigned char ac_weeks_since_calibaration;  /**< time (in weeks) between factory calibration and last AC event */
-        unsigned char reserved[1];
-    } rs2_dsm_params;
-#pragma pack( pop )
-
-typedef enum rs2_dsm_correction_model
-{
-    RS2_DSM_CORRECTION_NONE,        /**< hFactor and hOffset are not used, and no artificial error is induced */
-    RS2_DSM_CORRECTION_AOT,         /**< Aging-over-thermal (default); aging-induced error is uniform across temperature */
-    RS2_DSM_CORRECTION_TOA,         /**< Thermal-over-aging; aging-induced error changes alongside temperature */
-    RS2_DSM_CORRECTION_COUNT
-} rs2_dsm_correction_model;
-
 /** \brief Motion device intrinsics: scale, bias, and variances. */
 typedef struct rs2_motion_device_intrinsic
 {
@@ -149,6 +119,18 @@ typedef struct rs2_pose
     unsigned int    mapper_confidence;    /**< Pose map confidence 0x0 - Failed, 0x1 - Low, 0x2 - Medium, 0x3 - High                                      */
 } rs2_pose;
 
+/** \brief Object detection result from algorithm */
+typedef struct rs2_object_detection
+{
+    int class_id;       /**< Object class/category identifier */
+    int score;          /**< Detection confidence score 0-100 */
+    int top_left_x;     /**< Top-left corner pixel X coordinate */
+    int top_left_y;     /**< Top-left corner pixel Y coordinate */
+    int bottom_right_x; /**< Bottom-right corner pixel X coordinate */
+    int bottom_right_y; /**< Bottom-right corner pixel Y coordinate */
+    float depth;        /**< Mean depth in meters at detection location */
+} rs2_object_detection;
+
 /** \brief Severity of the librealsense logger. */
 typedef enum rs2_log_severity {
     RS2_LOG_SEVERITY_DEBUG, /**< Detailed information about ordinary operations */
@@ -163,6 +145,7 @@ typedef enum rs2_log_severity {
 const char* rs2_log_severity_to_string(rs2_log_severity info);
 
 /** \brief Specifies advanced interfaces (capabilities) objects may implement. */
+// To add a new extension, append it at the end of this enum to preserve ordering.
 typedef enum rs2_extension
 {
     RS2_EXTENSION_UNKNOWN,
@@ -221,6 +204,19 @@ typedef enum rs2_extension
     RS2_EXTENSION_MAX_USABLE_RANGE_SENSOR,
     RS2_EXTENSION_DEBUG_STREAM_SENSOR,
     RS2_EXTENSION_CALIBRATION_CHANGE_DEVICE,
+    RS2_EXTENSION_ROTATION_FILTER,
+    RS2_EXTENSION_SAFETY_SENSOR,
+    RS2_EXTENSION_DEPTH_MAPPING_SENSOR,
+    RS2_EXTENSION_LABELED_POINTS,
+    RS2_EXTENSION_ETH_CONFIG,
+    RS2_EXTENSION_SUPPORTED_EMBEDDED_FILTERS,
+    RS2_EXTENSION_DECIMATION_EMBEDDED_FILTER,
+    RS2_EXTENSION_TEMPORAL_EMBEDDED_FILTER,
+    RS2_EXTENSION_INFERENCE_FRAME,
+    RS2_EXTENSION_OBJECT_DETECTION_FRAME,
+    RS2_EXTENSION_INFERENCE_SENSOR,
+    RS2_EXTENSION_OBJECT_DETECTION_SENSOR,
+    RS2_EXTENSION_INFERENCE_PROFILE,
     RS2_EXTENSION_COUNT
 } rs2_extension;
 const char* rs2_extension_type_to_string(rs2_extension type);
@@ -233,7 +229,6 @@ typedef enum rs2_matchers
 
    RS2_MATCHER_DI_C,    //compare depth and ir based on frame number,
                         //compare the pair of corresponding depth and ir with color based on closest timestamp,
-                        //commonly used by SR300
 
    RS2_MATCHER_DLR_C,   //compare depth, left and right ir based on frame number,
                         //compare the set of corresponding depth, left and right with color based on closest timestamp,
@@ -253,6 +248,45 @@ typedef enum rs2_matchers
    RS2_MATCHER_COUNT
 } rs2_matchers;
 const char* rs2_matchers_to_string(rs2_matchers stream);
+
+typedef enum rs2_point_cloud_label
+{
+    RS2_POINT_CLOUD_LABEL_UNKNOWN,                  // No valid classification can be made for this point
+    RS2_POINT_CLOUD_LABEL_UNDEFINED,                // NAN pixel
+    RS2_POINT_CLOUD_LABEL_INVALID,                  // This point is discarded, i.e. outside of vertical FOV or too close
+    RS2_POINT_CLOUD_LABEL_GROUND,                   // This point belongs to ground plane
+    RS2_POINT_CLOUD_LABEL_NEAR_GROUND,              // This point is not on ground plane, but yet not part of a true obstacle
+    RS2_POINT_CLOUD_LABEL_OVERHEAD,                 // This point belongs to something above robot's height, but below the ceiling height, 
+                                                    // and not part of a true obstacle
+    RS2_POINT_CLOUD_LABEL_ABOVE_CEILING_HEIGHT,     // This point belongs to something above the ceiling height
+    RS2_POINT_CLOUD_LABEL_GAP,                      // This point belongs to a Gap Region
+    RS2_POINT_CLOUD_LABEL_MASKED,                   // This point belongs to a Masked Region
+    RS2_POINT_CLOUD_LABEL_CLIFF,                    // This point is part of a possible cliff
+    RS2_POINT_CLOUD_LABEL_OBSTACLE,                 // This point is a potential obstacle
+    RS2_POINT_CLOUD_LABEL_OBSTACLE_DANGER,          // This point is an actual obstacle inside the danger zone
+    RS2_POINT_CLOUD_LABEL_OBSTACLE_WARNING,         // This point is an actual obstacle inside the warning zone
+    RS2_POINT_CLOUD_LABEL_COUNT
+} rs2_point_cloud_label;
+const char* rs2_point_cloud_label_to_string(rs2_point_cloud_label label);
+
+typedef enum rs2_calib_location
+{
+    RS2_CALIB_LOCATION_FIRST,
+    RS2_CALIB_LOCATION_EEPROM = RS2_CALIB_LOCATION_FIRST,
+    RS2_CALIB_LOCATION_FLASH,
+    RS2_CALIB_LOCATION_RAM,
+    RS2_CALIB_LOCATION_COUNT
+} rs2_calib_location;
+const char* rs2_calib_location_to_string(rs2_calib_location calib_location);
+
+typedef enum rs2_embedded_filter_type
+{
+    RS2_EMBEDDED_FILTER_TYPE_FIRST,
+    RS2_EMBEDDED_FILTER_TYPE_DECIMATION = RS2_EMBEDDED_FILTER_TYPE_FIRST,
+    RS2_EMBEDDED_FILTER_TYPE_TEMPORAL,
+    RS2_EMBEDDED_FILTER_TYPE_COUNT
+} rs2_embedded_filter_type;
+const char* rs2_embedded_filter_type_to_string(rs2_embedded_filter_type embedded_filter);
 
 typedef struct rs2_device_info rs2_device_info;
 typedef struct rs2_device rs2_device;
@@ -281,8 +315,12 @@ typedef struct rs2_context rs2_context;
 typedef struct rs2_device_hub rs2_device_hub;
 typedef struct rs2_sensor_list rs2_sensor_list;
 typedef struct rs2_sensor rs2_sensor;
+typedef struct rs2_embedded_filter rs2_embedded_filter;
+typedef struct rs2_embedded_filter_list rs2_embedded_filter_list;
 typedef struct rs2_options rs2_options;
 typedef struct rs2_options_list rs2_options_list;
+typedef struct rs2_streams_list rs2_streams_list;
+typedef struct rs2_options_changed_callback rs2_options_changed_callback;
 typedef struct rs2_devices_changed_callback rs2_devices_changed_callback;
 typedef struct rs2_notification rs2_notification;
 typedef struct rs2_notifications_callback rs2_notifications_callback;
@@ -292,11 +330,12 @@ typedef struct rs2_firmware_log_parser rs2_firmware_log_parser;
 typedef struct rs2_terminal_parser rs2_terminal_parser;
 typedef void (*rs2_log_callback_ptr)(rs2_log_severity, rs2_log_message const *, void * arg);
 typedef void (*rs2_notification_callback_ptr)(rs2_notification*, void*);
-typedef void(*rs2_software_device_destruction_callback_ptr)(void*);
+typedef void (*rs2_software_device_destruction_callback_ptr)(void*);
 typedef void (*rs2_devices_changed_callback_ptr)(rs2_device_list*, rs2_device_list*, void*);
 typedef void (*rs2_frame_callback_ptr)(rs2_frame*, void*);
 typedef void (*rs2_frame_processor_callback_ptr)(rs2_frame*, rs2_source*, void*);
-typedef void(*rs2_update_progress_callback_ptr)(const float, void*);
+typedef void (*rs2_update_progress_callback_ptr)(const float, void*);
+typedef void (*rs2_options_changed_callback_ptr)(const rs2_options_list *);
 
 typedef double      rs2_time_t;     /**< Timestamp format. units are milliseconds */
 typedef long long   rs2_metadata_type; /**< Metadata attribute type is defined as 64 bit signed integer*/
@@ -307,6 +346,7 @@ const char* rs2_get_failed_function            (const rs2_error* error);
 const char* rs2_get_failed_args                (const rs2_error* error);
 const char* rs2_get_error_message              (const rs2_error* error);
 void        rs2_free_error                     (rs2_error* error);
+
 
 #ifdef __cplusplus
 }

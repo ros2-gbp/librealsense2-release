@@ -6,46 +6,49 @@ on:
   pull_request:
     branches: ['**']
 
+permissions: read-all
+
 jobs:
 
   build_lrs_ros2_package:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       matrix:
         ros_distribution:
-          - foxy
-          - galactic
           - humble
+          - kilted
           - rolling
+          - jazzy
 
         include:
-          # Foxy Fitzroy
-          - docker_image: ubuntu:focal
-            ros_distribution: foxy
-
-          # Galactic Geochelone
-          - docker_image: ubuntu:focal
-            ros_distribution: galactic
-
           # Humble Hawksbill
           - docker_image: ubuntu:jammy
             ros_distribution: humble
 
+          # Kilted Kaiju
+          - docker_image: ubuntu:noble
+            ros_distribution: kilted
+
           # Rolling Ridley
-          - docker_image: ubuntu:jammy
+          - docker_image: ubuntu:noble
             ros_distribution: rolling
+
+          # Jazzy Jalisco
+          - docker_image: ubuntu:noble
+            ros_distribution: jazzy
 
     container:
       image: ${{ matrix.docker_image }}
     steps:
 
       - name: setup ROS environment
-        uses: ros-tooling/setup-ros@v0.4
+        uses: ros-tooling/setup-ros@2b7b7e10fd30ff131dfb33248ddd71c5ba31dd30 #v0.7.15
         with:
           required-ros-distributions: ${{ matrix.ros_distribution }}
 
       - name: build librealsense ROS 2
-        uses: ros-tooling/action-ros-ci@v0.2
+        uses: ros-tooling/action-ros-ci@9125cf1fa1f87e7830ed1c77f8b1885ee649b9a0 #v0.4.6
         with:
           target-ros2-distro: ${{ matrix.ros_distribution }}
           skip-tests: true

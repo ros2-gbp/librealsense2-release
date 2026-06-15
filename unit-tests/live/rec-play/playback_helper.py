@@ -1,10 +1,13 @@
 # License: Apache 2.0. See LICENSE file in root directory.
-# Copyright(c) 2021 Intel Corporation. All Rights Reserved.
+# Copyright(c) 2021 RealSense, Inc. All Rights Reserved.
 
 
 import time
-from rspy import log, test
+import logging
+from pytest_check import check
 from rspy.timer import Timer
+
+log = logging.getLogger(__name__)
 
 '''
 This class is used to wait and verify for a requested playback status arrived within a requested timeout.
@@ -20,6 +23,7 @@ class PlaybackStatusVerifier:
 
     def __init__( self, dev ):
         self._current_status = None
+        self._statuses = []
         self._status_changes_cnt = 0
         playback_dev = dev.as_playback()
         '''
@@ -29,9 +33,11 @@ class PlaybackStatusVerifier:
         playback_dev.set_status_changed_callback( self.__signal_on_status_change )
 
     def __signal_on_status_change( self, playback_status ):
-        log.d('playback status callback invoked with', playback_status)
+        log.debug(f'playback status callback invoked with {playback_status}')
         self._status_changes_cnt += 1
         self._current_status = playback_status
+        self._statuses.append(playback_status)
+
 
     '''
     This function goal is to catch the first time the playback status match the required status,
@@ -48,21 +54,35 @@ class PlaybackStatusVerifier:
         required_status_detected = False
         wait_for_event_timer = Timer(timeout)
         wait_for_event_timer.start()
-        log.d('timeout set to', timeout, '[sec]')
+        log.debug(f'timeout set to {timeout} [sec]')
         while not wait_for_event_timer.has_expired():
             if required_status == self._current_status:
-                log.d('Required status "' + str(required_status) + '" detected!')
+                log.debug('Required status "' + str(required_status) + '" detected!')
                 required_status_detected = True
                 break
             time.sleep( sample_interval )
 
-        test.check(required_status_detected, description='Check failed, Timeout on waiting for ' + str(required_status) )
+        check.is_true(required_status_detected, 'Check failed, Timeout on waiting for ' + str(required_status) )
 
-        '''If the status changes too fast let say , Stopped -> Playing --> Stopped  within 1 sample time we can miss 
-        it. So if we already failed on the status we add a check to indicate it in the test result that our sample 
+        '''If the status changes too fast let say , Stopped -> Playing --> Stopped  within 1 sample time we can miss
+        it. So if we already failed on the status we add a check to indicate it in the test result that our sample
         interval may be too long and we may have missed the required status '''
         if not required_status_detected:
-            test.check( status_changes_cnt + 1 < self._status_changes_cnt,
+            check.is_true( status_changes_cnt + 1 < self._status_changes_cnt,
                     'Multiple status changes detected, expecting a single change, got '+ str( self._status_changes_cnt - status_changes_cnt ) +
                         ' changes, consider lowering the sample interval' )
 
+    def wait_for_status_changes( self, counter, timeout, sample_interval=0.01 ):
+        wait_for_event_timer = Timer(timeout)
+        wait_for_event_timer.start()
+        required_status_detected = False
+        log.debug(f'timeout set to {timeout} [sec]')
+        while not wait_for_event_timer.has_expired():
+            if counter == self._status_changes_cnt:
+                required_status_detected = True
+                break
+            time.sleep( sample_interval )
+        check.is_true(required_status_detected, 'Check failed, Timeout on waiting for status change')
+
+    def get_statuses(self):
+        return self._statuses

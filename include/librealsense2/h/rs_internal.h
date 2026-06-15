@@ -1,5 +1,5 @@
 /* License: Apache 2.0. See LICENSE file in root directory.
-   Copyright(c) 2017 Intel Corporation. All Rights Reserved. */
+   Copyright(c) 2017 RealSense, Inc. All Rights Reserved. */
 
 /** \file rs_internal.h
 * \brief
@@ -22,10 +22,8 @@ extern "C" {
 /**
 * Firmware size constants
 */
-    const int signed_fw_size = 0x18031C;
-    const int signed_sr300_size = 0x0C025C;
-    const int unsigned_fw_size = 0x200000;
-    const int unsigned_sr300_size = 0x100000;
+    const unsigned int signed_fw_size = 0x18031C;
+    const unsigned int unsigned_fw_size = 0x200000;
 
 /**
  * librealsense Recorder is intended for effective unit-testing
@@ -73,6 +71,16 @@ typedef struct rs2_pose_stream
     int fps;
     rs2_format fmt;
 } rs2_pose_stream;
+
+/** \brief All the parameters required to define an inference stream. */
+typedef struct rs2_inference_stream
+{
+    rs2_stream type;
+    int index;
+    int uid;
+    int fps;
+    rs2_format fmt;
+} rs2_inference_stream;
 
 /** \brief All the parameters required to define a video frame. */
 typedef struct rs2_software_video_frame
@@ -322,6 +330,23 @@ rs2_stream_profile* rs2_software_sensor_add_pose_stream(rs2_sensor* sensor, rs2_
 rs2_stream_profile* rs2_software_sensor_add_pose_stream_ex(rs2_sensor* sensor, rs2_pose_stream pose_stream, int is_default, rs2_error** error);
 
 /**
+* Add inference stream to sensor
+* \param[in] sensor the software sensor
+* \param[in] inference_stream all the stream components
+* \param[out] error  if non-null, receives any error that occurs during this call, otherwise, errors are ignored
+*/
+rs2_stream_profile* rs2_software_sensor_add_inference_stream(rs2_sensor* sensor, rs2_inference_stream inference_stream, rs2_error** error);
+
+/**
+* Add inference stream to sensor
+* \param[in] sensor the software sensor
+* \param[in] inference_stream all the stream components
+* \param[in] is_default whether or not the stream should be a default stream for the device
+* \param[out] error  if non-null, receives any error that occurs during this call, otherwise, errors are ignored
+*/
+rs2_stream_profile* rs2_software_sensor_add_inference_stream_ex(rs2_sensor* sensor, rs2_inference_stream inference_stream, int is_default, rs2_error** error);
+
+/**
  * Add read only option to sensor
  * \param[in] sensor the software sensor
  * \param[in] option the wanted option
@@ -360,6 +385,20 @@ void rs2_software_sensor_add_option(rs2_sensor* sensor, rs2_option option, float
 */
 void rs2_software_sensor_detach(rs2_sensor* sensor, rs2_error** error);
 
+
+/**
+ * \brief Starts collecting FW log messages in the device.
+ * \param[in] dev            Device that will start collecting log messages.
+ * \param[out] error         If non-null, receives any error that occurs during this call, otherwise, errors are
+ */
+void rs2_start_collecting_fw_logs( rs2_device * dev, rs2_error ** error );
+
+/**
+ * \brief Stops collecting FW log messages in the device.
+ * \param[in] dev            Device that will stop collecting log messages.
+ * \param[out] error         If non-null, receives any error that occurs during this call, otherwise, errors are
+ */
+void rs2_stop_collecting_fw_logs( rs2_device * dev, rs2_error ** error );
 
 /**
 * \brief Creates RealSense firmware log message.
@@ -485,12 +524,22 @@ const char* rs2_get_fw_log_parsed_message(rs2_firmware_log_parsed_message* fw_lo
 const char* rs2_get_fw_log_parsed_file_name(rs2_firmware_log_parsed_message* fw_log_parsed_msg, rs2_error** error);
 
 /**
-* \brief Gets RealSense firmware log parsed message thread name.
+* \brief Gets RealSense firmware log parsed message source (SoC) or thread name.
 * \param[in] fw_log_parsed_msg      firmware log parsed message object
 * \param[out] error                 If non-null, receives any error that occurs during this call, otherwise, errors are ignored.
-* \return                           thread name of the firmware log parsed message
+* \return                           source (SoC) or thread name of the firmware log parsed message
 */
 const char* rs2_get_fw_log_parsed_thread_name(rs2_firmware_log_parsed_message* fw_log_parsed_msg, rs2_error** error);
+
+/**
+ * \brief Gets RealSense firmware log parsed message module name.
+ * \param[in] fw_log_parsed_msg      firmware log parsed message object
+ * \param[out] error                 If non-null, receives any error that occurs during this call, otherwise, errors are
+ * ignored. \return                  module name of the firmware log parsed message
+ */
+const char * rs2_get_fw_log_parsed_module_name( rs2_firmware_log_parsed_message * fw_log_parsed_msg,
+                                                rs2_error ** error );
+
 
 /**
 * \brief Gets RealSense firmware log parsed message severity.

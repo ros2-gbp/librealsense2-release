@@ -54,15 +54,16 @@ namespace Intel.RealSense
                 using (var ctx = new Context())
                 {
                     var devices = ctx.QueryDevices();
+                    Console.WriteLine("There are {0} connected RealSense devices.", devices.Count);
+                    if (devices.Count == 0) return;
                     var dev = devices[0];
 
                     Console.WriteLine("\nUsing device 0, an {0}", dev.Info[CameraInfo.Name]);
                     Console.WriteLine("    Serial number: {0}", dev.Info[CameraInfo.SerialNumber]);
                     Console.WriteLine("    Firmware version: {0}", dev.Info[CameraInfo.FirmwareVersion]);
 
-                    var sensors = dev.QuerySensors();
-                    var depthSensor = sensors[0];
-                    var colorSensor = sensors[1];
+                    var depthSensor = dev.FirstDepthSensor();
+                    var colorSensor = dev.FirstColorSensor();
 
                     var depthProfile = depthSensor.StreamProfiles
                                         .Where(p => p.Stream == Stream.Depth)

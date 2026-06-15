@@ -1,10 +1,16 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2017 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2017 RealSense, Inc. All Rights Reserved.
 
 #include "record_sensor.h"
 #include "api.h"
 #include "stream.h"
-#include "l500/l500-depth.h"
+#include <src/depth-sensor.h>
+#include <src/color-sensor.h>
+#include <src/safety-sensor.h>
+#include <src/depth-mapping-sensor.h>
+#include <src/core/frame-callback.h>
+#include <src/core/inference.h>
+#include <src/inference-sensor.h>
 
 #include <rsutils/string/from.h>
 
@@ -17,13 +23,21 @@ librealsense::record_sensor::record_sensor( device_interface& device,
     m_parent_device(device),
     m_is_sensor_hooked(false),
     m_register_notification_to_base(true),
-    m_before_start_callback_token(-1)
+    m_before_start_callback_token(-1),
+    m_callback_lifetime(std::make_shared<callback_lifetime>())
 {
     LOG_DEBUG("Created record_sensor");
 }
 
 librealsense::record_sensor::~record_sensor()
 {
+    // Disarm every callback lambda that captured the sentinel. Acquiring the mutex
+    // drains any in-flight body; the alive=false store disarms future invocations.
+    {
+        std::lock_guard< std::mutex > lock( m_callback_lifetime->mutex );
+        m_callback_lifetime->alive = false;
+    }
+
     m_sensor.unregister_before_start_callback(m_before_start_callback_token);
     disable_sensor_options_recording();
     disable_sensor_hooks();
@@ -93,7 +107,7 @@ bool librealsense::record_sensor::supports_option(rs2_option id) const
     return m_sensor.supports_option(id);
 }
 
-void librealsense::record_sensor::register_notifications_callback(notifications_callback_ptr callback)
+void librealsense::record_sensor::register_notifications_callback( rs2_notifications_callback_sptr callback )
 {
     if (m_register_notification_to_base)
     {
@@ -101,27 +115,47 @@ void librealsense::record_sensor::register_notifications_callback(notifications_
         return;
     }
 
-    m_user_notification_callback = std::move(callback);
-    auto from_live_sensor = notifications_callback_ptr(new notification_callback([&](rs2_notification* n)
     {
-        if (m_is_recording)
+        std::lock_guard< std::mutex > lock( m_callback_lifetime->mutex );
+        m_user_notification_callback = std::move(callback);
+    }
+
+    // The lambda is owned by m_sensor (which outlives *this), so it must not capture
+    // references into *this. Under the lifetime mutex we check the sentinel and snapshot
+    // the members the body needs; the lock is dropped before invoking any user callback.
+    auto lifetime = m_callback_lifetime;
+    auto self = this;
+    auto from_live_sensor = rs2_notifications_callback_sptr(new notification_callback([lifetime, self](rs2_notification* n)
+    {
+        bool is_recording;
+        std::function< void( const notification & ) > on_notification;
+        rs2_notifications_callback_sptr user_cb;
         {
-            on_notification(*(n->_notification));
+            std::lock_guard< std::mutex > lock( lifetime->mutex );
+            if (!lifetime->alive)
+                return;
+            is_recording = self->m_is_recording;
+            on_notification = self->_on_notification;
+            user_cb = self->m_user_notification_callback;
         }
-        if (m_user_notification_callback)
+        if (is_recording)
         {
-            m_user_notification_callback->on_notification(n);
+            on_notification( *( n->_notification ) );
+        }
+        if (user_cb)
+        {
+            user_cb->on_notification(n);
         }
     }), [](rs2_notifications_callback* p) { p->release(); });
     m_sensor.register_notifications_callback(std::move(from_live_sensor));
 }
 
-notifications_callback_ptr librealsense::record_sensor::get_notifications_callback() const
+rs2_notifications_callback_sptr librealsense::record_sensor::get_notifications_callback() const
 {
     return m_sensor.get_notifications_callback();
 }
 
-void librealsense::record_sensor::start(frame_callback_ptr callback)
+void librealsense::record_sensor::start( rs2_frame_callback_sptr callback )
 {
     m_sensor.start(callback);
 }
@@ -132,26 +166,6 @@ void librealsense::record_sensor::stop()
 bool librealsense::record_sensor::is_streaming() const
 {
     return m_sensor.is_streaming();
-}
-
-template <rs2_extension E, typename P>
-bool librealsense::record_sensor::extend_to_aux(P* p, void** ext)
-{
-    using EXT_TYPE = typename ExtensionToType<E>::type;
-    auto ptr = As<EXT_TYPE>(p);
-    if (!ptr)
-        return false;
-
-
-    if (auto recordable = As<librealsense::recordable<EXT_TYPE>>(p))
-    {
-        recordable->enable_recording([this](const EXT_TYPE& ext1) {
-            record_snapshot<EXT_TYPE>(E, ext1);
-        });
-    }
-
-    *ext = ptr;
-    return true;
 }
 
 bool librealsense::record_sensor::extend_to(rs2_extension extension_type, void** ext)
@@ -169,13 +183,36 @@ bool librealsense::record_sensor::extend_to(rs2_extension extension_type, void**
     case RS2_EXTENSION_INFO:    // [[fallthrough]]
         *ext = this;
         return true;
-    case RS2_EXTENSION_DEPTH_SENSOR    : return extend_to_aux<RS2_EXTENSION_DEPTH_SENSOR   >(&m_sensor, ext);
-    case RS2_EXTENSION_L500_DEPTH_SENSOR: return extend_to_aux<RS2_EXTENSION_L500_DEPTH_SENSOR   >(&m_sensor, ext);
-    case RS2_EXTENSION_DEPTH_STEREO_SENSOR: return extend_to_aux<RS2_EXTENSION_DEPTH_STEREO_SENSOR   >(&m_sensor, ext);
-    case RS2_EXTENSION_COLOR_SENSOR:        return extend_to_aux<RS2_EXTENSION_COLOR_SENSOR   >(&m_sensor, ext);
-    case RS2_EXTENSION_MOTION_SENSOR:       return extend_to_aux<RS2_EXTENSION_MOTION_SENSOR   >(&m_sensor, ext);
-    case RS2_EXTENSION_FISHEYE_SENSOR:      return extend_to_aux<RS2_EXTENSION_FISHEYE_SENSOR   >(&m_sensor, ext);
-    case RS2_EXTENSION_POSE_SENSOR:         return extend_to_aux<RS2_EXTENSION_POSE_SENSOR   >(&m_sensor, ext);
+    case RS2_EXTENSION_DEPTH_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_DEPTH_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_DEPTH_STEREO_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_DEPTH_STEREO_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_COLOR_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_COLOR_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_MOTION_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_MOTION_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_FISHEYE_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_FISHEYE_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_POSE_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_POSE_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_SAFETY_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_SAFETY_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_DEPTH_MAPPING_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_DEPTH_MAPPING_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_INFERENCE_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_INFERENCE_SENSOR >::type >( &m_sensor );
+        return *ext;
+    case RS2_EXTENSION_OBJECT_DETECTION_SENSOR:
+        *ext = As< typename ExtensionToType< RS2_EXTENSION_OBJECT_DETECTION_SENSOR >::type >( &m_sensor );
+        return *ext;
 
     //Other extensions are not expected to be extensions of a sensor
     default:
@@ -189,12 +226,12 @@ device_interface& record_sensor::get_device()
     return m_parent_device;
 }
 
-frame_callback_ptr record_sensor::get_frames_callback() const
+rs2_frame_callback_sptr record_sensor::get_frames_callback() const
 {
     return m_frame_callback;
 }
 
-void record_sensor::set_frames_callback(frame_callback_ptr callback)
+void record_sensor::set_frames_callback( rs2_frame_callback_sptr callback )
 {
     m_frame_callback = callback;
 }
@@ -203,6 +240,12 @@ stream_profiles record_sensor::get_active_streams() const
 {
     return m_sensor.get_active_streams();
 }
+
+stream_profiles const & record_sensor::get_raw_stream_profiles() const
+{
+    return m_sensor.get_raw_stream_profiles();
+}
+
 
 int record_sensor::register_before_streaming_changes_callback(std::function<void(bool)> callback)
 {
@@ -214,28 +257,20 @@ void record_sensor::unregister_before_start_callback(int token)
     throw librealsense::not_implemented_exception("playback_sensor::unregister_before_start_callback");
 }
 
-template <typename T>
-void librealsense::record_sensor::record_snapshot(rs2_extension extension_type, const librealsense::recordable<T>& ext)
-{
-    std::shared_ptr<T> snapshot;
-    ext.create_snapshot(snapshot);
-    auto ext_snapshot = As<extension_snapshot>(snapshot);
-    if(m_is_recording)
-    {
-        //Send to recording thread
-        on_extension_change(extension_type, ext_snapshot);
-    }
-}
-
 void record_sensor::stop_with_error(const std::string& error_msg)
 {
     disable_recording();
-    if (m_user_notification_callback)
+    rs2_notifications_callback_sptr user_cb;
+    {
+        std::lock_guard< std::mutex > lock( m_callback_lifetime->mutex );
+        user_cb = m_user_notification_callback;
+    }
+    if (user_cb)
     {
         std::string msg = rsutils::string::from() << "Stopping recording for sensor (streaming will continue). (Error: " << error_msg << ")";
         notification noti(RS2_NOTIFICATION_CATEGORY_UNKNOWN_ERROR, 0, RS2_LOG_SEVERITY_ERROR, msg);
         rs2_notification rs2_noti(&noti);
-        m_user_notification_callback->on_notification(&rs2_noti);
+        user_cb->on_notification(&rs2_noti);
     }
 }
 
@@ -254,7 +289,7 @@ void record_sensor::record_frame(frame_holder frame)
     if(m_is_recording)
     {
         //Send to recording thread
-        on_frame(std::move(frame));
+        _on_frame( std::move( frame ) );
     }
 }
 
@@ -279,7 +314,10 @@ void record_sensor::disable_sensor_hooks()
 void record_sensor::hook_sensor_callbacks()
 {
     m_register_notification_to_base = false;
-    m_user_notification_callback = m_sensor.get_notifications_callback();
+    {
+        std::lock_guard< std::mutex > lock( m_callback_lifetime->mutex );
+        m_user_notification_callback = m_sensor.get_notifications_callback();
+    }
     register_notifications_callback(m_user_notification_callback);
     m_original_callback = m_sensor.get_frames_callback();
     if (m_original_callback)
@@ -289,26 +327,25 @@ void record_sensor::hook_sensor_callbacks()
         m_is_recording = true;
     }
 }
-frame_callback_ptr librealsense::record_sensor::wrap_frame_callback(frame_callback_ptr callback)
+rs2_frame_callback_sptr librealsense::record_sensor::wrap_frame_callback( rs2_frame_callback_sptr callback )
 {
-    auto record_cb = [this, callback](frame_holder frame)
-    {
-        record_frame(frame.clone());
+    return make_frame_callback(
+        [this, callback]( frame_holder frame )
+        {
+            record_frame( frame.clone() );
 
-        //Raise to user callback
-        frame_interface* ref = nullptr;
-        std::swap(frame.frame, ref);
-        callback->on_frame((rs2_frame*)ref);
-    };
-
-    return std::make_shared<frame_holder_callback>(record_cb);
+            // Raise to user callback
+            frame_interface * ref = nullptr;
+            std::swap( frame.frame, ref );
+            callback->on_frame( (rs2_frame *)ref );
+        } );
 }
 void record_sensor::unhook_sensor_callbacks()
 {
-    if (m_user_notification_callback)
-    {
-        m_sensor.register_notifications_callback(m_user_notification_callback);
-    }
+    // Always restore (possibly null) so our wrapper lambda is removed from the live
+    // sensor's notifications dispatcher; otherwise it would keep being invoked after
+    // *this is destroyed, dereferencing freed memory.
+    m_sensor.register_notifications_callback(m_user_notification_callback);
 
     if (m_original_callback)
     {
@@ -334,12 +371,29 @@ void record_sensor::enable_sensor_options_recording()
         try
         {
             auto& opt = m_sensor.get_option(id);
-            opt.enable_recording([this, id](const librealsense::option& option) {
+            // Same lifetime concern as the notifications lambda above. record_snapshot's
+            // body is inlined here so the user-supplied _on_extension_change call can run
+            // outside the lifetime mutex.
+            auto lifetime = m_callback_lifetime;
+            auto self = this;
+            opt.enable_recording([lifetime, self, id](const librealsense::option& option) {
+                bool is_recording;
+                std::function< void( rs2_extension, std::shared_ptr< extension_snapshot > ) > on_extension_change;
+                {
+                    std::lock_guard< std::mutex > lock( lifetime->mutex );
+                    if (!lifetime->alive)
+                        return;
+                    is_recording = self->m_is_recording;
+                    on_extension_change = self->_on_extension_change;
+                }
                 options_container options;
-                std::shared_ptr<librealsense::option> option_snapshot;
-                option.create_snapshot(option_snapshot);
-                options.register_option(id, option_snapshot);
-                record_snapshot<options_interface>(RS2_EXTENSION_OPTIONS, options);
+                std::shared_ptr< librealsense::option > option_snapshot;
+                option.create_snapshot( option_snapshot );
+                options.register_option( id, option_snapshot );
+                std::shared_ptr< options_interface > options_snapshot;
+                options.create_snapshot( options_snapshot );
+                if (is_recording)
+                    on_extension_change( RS2_EXTENSION_OPTIONS, As< extension_snapshot >( options_snapshot ) );
             });
             m_recording_options.insert(id);
         }
@@ -374,12 +428,15 @@ void record_sensor::wrap_streams()
                 extension_type = RS2_EXTENSION_MOTION_PROFILE;
             else if (Is<librealsense::pose_stream_profile_interface>(stream))
                 extension_type = RS2_EXTENSION_POSE_PROFILE;
+            else if (Is<librealsense::inference_stream_profile_interface>(stream))
+                extension_type = RS2_EXTENSION_INFERENCE_PROFILE;
             else
                 throw std::runtime_error("Unsupported stream");
 
-            on_extension_change(extension_type, std::dynamic_pointer_cast<extension_snapshot>(snapshot));
+            if( m_is_recording )
+                _on_extension_change( extension_type, std::dynamic_pointer_cast< extension_snapshot >( snapshot ) );
 
-           m_recorded_streams_ids.insert(id);
+            m_recorded_streams_ids.insert(id);
         }
     }
 }

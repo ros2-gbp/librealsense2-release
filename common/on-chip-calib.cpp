@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2017 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2017 RealSense, Inc. All Rights Reserved.
 
 #include <glad/glad.h>
 #include "on-chip-calib.h"
@@ -10,24 +10,35 @@
 #include <thread>
 #include <condition_variable>
 #include <model-views.h>
+#include <realsense_imgui.h>
 #include <viewer.h>
 #include "calibration-model.h"
 #include "os.h"
 #include "../src/algo.h"
 #include "../tools/depth-quality/depth-metrics.h"
 
+
+static constexpr float off_value = 0.0f;
+static constexpr float on_value = 1.0f;
+
 namespace rs2
 {
     on_chip_calib_manager::on_chip_calib_manager(viewer_model& viewer, std::shared_ptr<subdevice_model> sub, device_model& model, device dev, std::shared_ptr<subdevice_model> sub_color, bool uvmapping_calib_full)
         : process_manager("On-Chip Calibration"), _model(model), _dev(dev), _sub(sub), _viewer(viewer), _sub_color(sub_color), py_px_only(!uvmapping_calib_full)
     {
-        device_id_string = "Unknown";
-        if (dev.supports(RS2_CAMERA_INFO_PRODUCT_ID))
+        device_name_string = "Unknown";
+        if (dev.supports(RS2_CAMERA_INFO_NAME))
         {
-            device_id_string = _dev.get_info(RS2_CAMERA_INFO_PRODUCT_ID);
-            if (val_in_range(device_id_string, { std::string("0AD3") }))
-                speed = 4;
+            device_name_string = _dev.get_info( RS2_CAMERA_INFO_NAME );
         }
+
+        if( dev.supports( RS2_CAMERA_INFO_CONNECTION_TYPE ) )
+        {
+            auto con_type = std::string( dev.get_info( RS2_CAMERA_INFO_CONNECTION_TYPE ) );
+            if( con_type == "GMSL" )
+                host_assistance = 1;  // To be used for MIPI SKU only
+        }
+
         if (dev.supports(RS2_CAMERA_INFO_FIRMWARE_VERSION))
         {
             std::string fw_version = dev.get_info(RS2_CAMERA_INFO_FIRMWARE_VERSION);
@@ -69,6 +80,84 @@ namespace rs2
             _sub_color->algo_roi = { 0, 0, 0, 0 };
         }
     }
+    
+    void on_chip_calib_manager::save_options_controlled_by_calib()
+    {
+        // Calibration might fail and be restarted, save only once, or we will keep chaged options.
+        if( ! _options_saved )
+        {
+            save_laser_emitter_state();
+            save_thermal_loop_state();
+            _options_saved = true;
+        }
+    }
+
+    void on_chip_calib_manager::restore_options_controlled_by_calib()
+    {
+        // Restore might be called several times, restore only if options where actually saved.
+        if( _options_saved )
+        {
+            restore_laser_emitter_state();
+            restore_thermal_loop_state();
+            _options_saved = false;
+        }
+    }
+
+    void on_chip_calib_manager::save_laser_emitter_state()
+    {
+        auto it = _sub->options_metadata.find( RS2_OPTION_EMITTER_ENABLED );
+        if ( it != _sub->options_metadata.end() ) //Option supported
+        {
+            _laser_status_prev = _sub->s->get_option( RS2_OPTION_EMITTER_ENABLED );
+        }
+    }
+
+    void on_chip_calib_manager::save_thermal_loop_state()
+    {
+        auto it = _sub->options_metadata.find( RS2_OPTION_THERMAL_COMPENSATION );
+        if( it != _sub->options_metadata.end() )  // Option supported
+        {
+            _thermal_loop_prev = _sub->s->get_option( RS2_OPTION_THERMAL_COMPENSATION );
+        }
+    }
+
+    void on_chip_calib_manager::restore_laser_emitter_state()
+    {
+        set_laser_emitter_state( _laser_status_prev );
+    }
+
+    void on_chip_calib_manager::restore_thermal_loop_state()
+    {
+        set_thermal_loop_state( _thermal_loop_prev );
+    }
+
+    void on_chip_calib_manager::set_laser_emitter_state( float value )
+    {
+        // Use options_model::set_option to update GUI after change
+        std::string ignored_error_message{ "" };
+        auto it = _sub->options_metadata.find( RS2_OPTION_EMITTER_ENABLED );
+        if( it != _sub->options_metadata.end() )  // Option supported
+        {
+            it->second.set_option( RS2_OPTION_EMITTER_ENABLED, value, ignored_error_message );
+            if( it->second.value_as_float() != value )
+                throw std::runtime_error( rsutils::string::from()
+                                          << "Failed to set laser " << ( value == off_value ? "off" : "on" ) );
+        }
+    }
+
+    void on_chip_calib_manager::set_thermal_loop_state( float value )
+    {
+        // Use options_model::set_option to update GUI after change
+        std::string ignored_error_message{ "" };
+        auto it = _sub->options_metadata.find( RS2_OPTION_THERMAL_COMPENSATION );
+        if( it != _sub->options_metadata.end() )  // Option supported
+        {
+            it->second.set_option( RS2_OPTION_THERMAL_COMPENSATION, value, ignored_error_message );
+            if( it->second.value_as_float() != value )
+                throw std::runtime_error( rsutils::string::from()
+                                          << "Failed to set thermal compensation " << ( value == off_value ? "off" : "on" ) );
+        }
+    }
 
     void on_chip_calib_manager::stop_viewer(invoker invoke)
     {
@@ -79,8 +168,9 @@ namespace rs2
             invoke([&]()
                 {
                     // Stop viewer UI
-                    _sub->stop(_viewer.not_model);
-                    if (_sub_color.get())
+                    if (_sub->streaming)
+                        _sub->stop(_viewer.not_model);
+                    if (_sub_color.get() && _sub_color->streaming)
                         _sub_color->stop(_viewer.not_model);
                 });
 
@@ -164,15 +254,6 @@ namespace rs2
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-
-            _sub->stream_enabled.clear();
-            _sub->ui.selected_format_id.clear();
-            if (_sub_color)
-            {
-                _sub_color->stream_enabled.clear();
-                _sub_color->ui.selected_format_id.clear();
-            }
-            _viewer.streams.clear();
         }
         catch (...) {}
     }
@@ -201,21 +282,23 @@ namespace rs2
             _sub->ui.selected_format_id.clear();
             _sub->ui.selected_format_id[_uid] = 0;
 
-            _sub->ui.selected_shared_fps_id = 0; // For Ground Truth default is the lowest common FPS for USB2/# compatibility
             // Select FPS value
+            auto fps = 30;
+            if (_sub->dev.supports(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR))
+            {
+                std::string desc = _sub->dev.get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR);
+                if (!starts_with(desc, "3."))
+                    fps = 6; //USB2 bandwidth limitation for 720P
+            }
+            _sub->ui.selected_shared_fps_id = 0; // If requested FPS is not found use lowest common FPS for USB2 compatibility (sorted lowest first)
             for (int i = 0; i < _sub->shared_fps_values.size(); i++)
             {
-                if (_sub->shared_fps_values[i] == 0)
+                if (_sub->shared_fps_values[i] == fps)
                     _sub->ui.selected_shared_fps_id = i;
             }
 
             // Select Resolution
-            for (int i = 0; i < _sub->res_values.size(); i++)
-            {
-                auto kvp = _sub->res_values[i];
-                if (kvp.first == 1280 && kvp.second == 720)
-                    _sub->ui.selected_res_id = i;
-            }
+            _sub->select_resolution( 1280, 720, RS2_STREAM_INFRARED );
 
             auto profiles = _sub->get_selected_profiles();
 
@@ -225,6 +308,8 @@ namespace rs2
             _sub->play(profiles, _viewer, _model.dev_syncer);
             for (auto&& profile : profiles)
                 _viewer.begin_stream(_sub, profile);
+
+            set_laser_emitter_state( off_value );
         }
         catch (...) {}
     }
@@ -273,12 +358,7 @@ namespace rs2
             }
 
             // Select Resolution
-            for (int i = 0; i < _sub->res_values.size(); i++)
-            {
-                auto kvp = _sub->res_values[i];
-                if (kvp.first == 1280 && kvp.second == 720)
-                    _sub->ui.selected_res_id = i;
-            }
+            _sub->select_resolution( 1280, 720, RS2_STREAM_INFRARED );
 
             auto profiles = _sub->get_selected_profiles();
 
@@ -288,6 +368,8 @@ namespace rs2
             _sub->play(profiles, _viewer, _model.dev_syncer);
             for (auto&& profile : profiles)
                 _viewer.begin_stream(_sub, profile);
+
+            set_laser_emitter_state( off_value );
         }
         catch (...) {}
     }
@@ -359,12 +441,8 @@ namespace rs2
                 }
 
                 // Select Resolution
-                for (int i = 0; i < _sub->res_values.size(); i++)
-                {
-                    auto kvp = _sub->res_values[i];
-                    if (kvp.first == 1280 && kvp.second == 720)
-                        _sub->ui.selected_res_id = i;
-                }
+                _sub->select_resolution( 1280, 720, RS2_STREAM_INFRARED );
+                _sub->select_resolution( 1280, 720, RS2_STREAM_DEPTH );
 
                 auto profiles = _sub->get_selected_profiles();
 
@@ -377,12 +455,7 @@ namespace rs2
                         _sub_color->ui.selected_shared_fps_id = i;
                 }
 
-                for (int i = 0; i < _sub_color->res_values.size(); i++)
-                {
-                    auto kvp = _sub_color->res_values[i];
-                    if (kvp.first == 1280 && kvp.second == 720)
-                        _sub_color->ui.selected_res_id = i;
-                }
+                _sub_color->select_resolution( 1280, 720, RS2_STREAM_COLOR );
 
                 profiles_color = _sub_color->get_selected_profiles();
 
@@ -406,12 +479,6 @@ namespace rs2
         bool frame_arrived = false;
         try
         {
-            if (_sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-            {
-                thermal_loop_prev = _sub->s->get_option(RS2_OPTION_THERMAL_COMPENSATION);
-                _sub->s->set_option(RS2_OPTION_THERMAL_COMPENSATION, 0.f);
-            }
-
             bool run_fl_calib = ( (action == RS2_CALIB_ACTION_FL_CALIB) && (w == 1280) && (h == 720));
             if (action == RS2_CALIB_ACTION_TARE_GROUND_TRUTH)
             {
@@ -424,6 +491,7 @@ namespace rs2
                         break;
                     }
                 }
+                _sub->select_resolution( w, h, RS2_STREAM_INFRARED );
             }
             else if (action == RS2_CALIB_ACTION_UVMAPPING_CALIB)
             {
@@ -448,6 +516,8 @@ namespace rs2
                     if (first_done && second_done)
                         break;
                 }
+                _sub->select_resolution( w, h, RS2_STREAM_INFRARED );
+                _sub->select_resolution( w, h, RS2_STREAM_DEPTH);
 
                 _sub_color->ui.selected_format_id.clear();
                 _sub_color->ui.selected_format_id[_uid_color] = 0;
@@ -468,56 +538,9 @@ namespace rs2
                         break;
                 }
 
-                if (_sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                    _sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, 0.0f);
-                if (_sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                    _sub->s->set_option(RS2_OPTION_THERMAL_COMPENSATION, 0.f);
-            }
-            else if (action == RS2_CALIB_ACTION_UVMAPPING_CALIB)
-            {
-                _uid = 1;
-                _uid2 = 0;
-                bool first_done = false;
-                bool second_done = false;
-                for (const auto& format : _sub->formats)
-                {
-                    if (format.second[0] == "Y8" && !first_done)
-                    {
-                        _uid = format.first;
-                        first_done = true;
-                    }
-
-                    if (format.second[0] == "Z16" && !second_done)
-                    {
-                        _uid2 = format.first;
-                        second_done = true;
-                    }
-
-                    if (first_done && second_done)
-                        break;
-                }
-
-                _sub_color->ui.selected_format_id.clear();
-                _sub_color->ui.selected_format_id[_uid_color] = 0;
-                for (const auto& format : _sub_color->formats)
-                {
-                    int done = false;
-                    for (int i = 0; i < format.second.size(); ++i)
-                    {
-                        if (format.second[i] == "RGB8")
-                        {
-                            _uid_color = format.first;
-                            _sub_color->ui.selected_format_id[_uid_color] = i;
-                            done = true;
-                            break;
-                        }
-                    }
-                    if (done)
-                        break;
-                }
-
-                if (_sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                    _sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, 0.0f);
+                // TODO - When implementing UV mapping calibration - should remove from here and handle in process_flow()
+                set_laser_emitter_state( off_value );
+                set_thermal_loop_state( off_value );
             }
             else if (action == RS2_CALIB_ACTION_FL_PLUS_CALIB)
             {
@@ -553,8 +576,11 @@ namespace rs2
                         break;
                 }
 
-                if (_sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                    _sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, 0.0f);
+                _sub->select_resolution( w, h, RS2_STREAM_INFRARED );
+                _sub->select_resolution( w, h, RS2_STREAM_DEPTH );
+
+                // TODO - When implementing FL plus calibration - should remove from here and handle in process_flow()
+                set_laser_emitter_state( off_value );
             }
             else if (run_fl_calib)
             {
@@ -577,11 +603,7 @@ namespace rs2
                         }
                     }
                 }
-
-                if (_sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                    _sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, 0.0f);
-                if (_sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                    _sub->s->set_option(RS2_OPTION_THERMAL_COMPENSATION, 0.f);
+                _sub->select_resolution( w, h, RS2_STREAM_INFRARED );
             }
             else
             {
@@ -594,6 +616,7 @@ namespace rs2
                         break;
                     }
                 }
+                _sub->select_resolution( w, h, RS2_STREAM_DEPTH );
             }
 
             // Select stream
@@ -614,34 +637,9 @@ namespace rs2
                     _sub->ui.selected_shared_fps_id = i;
             }
 
-            // Select Resolution
-            for (int i = 0; i < _sub->res_values.size(); i++)
-            {
-                auto kvp = _sub->res_values[i];
-                if (kvp.first == w && kvp.second == h)
-                    _sub->ui.selected_res_id = i;
-            }
-
-            // If not supported, try WxHx30
             if (!_sub->is_selected_combination_supported())
             {
-                for (int i = 0; i < _sub->shared_fps_values.size(); i++)
-                {
-                    //if (_sub->shared_fps_values[i] == 30)
-                    _sub->ui.selected_shared_fps_id = i;
-                    if (_sub->is_selected_combination_supported()) break;
-                }
-
-                // If still not supported, try VGA30
-                if (!_sub->is_selected_combination_supported())
-                {
-                    for (int i = 0; i < _sub->res_values.size(); i++)
-                    {
-                        auto kvp = _sub->res_values[i];
-                        if (kvp.first == 640 && kvp.second == 480)
-                            _sub->ui.selected_res_id = i;
-                    }
-                }
+                return false;
             }
 
             auto profiles = _sub->get_selected_profiles();
@@ -657,12 +655,7 @@ namespace rs2
                         _sub_color->ui.selected_shared_fps_id = i;
                 }
 
-                for (int i = 0; i < _sub_color->res_values.size(); i++)
-                {
-                    auto kvp = _sub_color->res_values[i];
-                    if (kvp.first == w && kvp.second == h)
-                        _sub_color->ui.selected_res_id = i;
-                }
+                _sub_color->select_resolution( w, h, RS2_STREAM_COLOR );
 
                 profiles_color = _sub_color->get_selected_profiles();
             }
@@ -707,11 +700,6 @@ namespace rs2
         return frame_arrived;
     }
 
-    std::pair<float, float> on_chip_calib_manager::get_metric(bool use_new)
-    {
-        return _metrics[use_new ? 1 : 0];
-    }
-
     void on_chip_calib_manager::try_start_viewer(int w, int h, int fps, invoker invoke)
     {
         bool started = start_viewer(w, h, fps, invoke);
@@ -727,119 +715,6 @@ namespace rs2
             log( "Failed to start streaming" );
             throw std::runtime_error( rsutils::string::from() << "Failed to start streaming (" << w << ", " << h << ", " << fps << ")!");
         }
-    }
-
-    std::pair<float, float> on_chip_calib_manager::get_depth_metrics(invoker invoke)
-    {
-        using namespace depth_quality;
-
-        auto f = fetch_depth_frame(invoke);
-        auto sensor = _sub->s->as<rs2::depth_stereo_sensor>();
-        auto intr = f.get_profile().as<rs2::video_stream_profile>().get_intrinsics();
-        rs2::region_of_interest roi { (int)(f.get_width() * 0.45f), (int)(f.get_height()  * 0.45f),
-                                      (int)(f.get_width() * 0.55f), (int)(f.get_height() * 0.55f) };
-        std::vector<single_metric_data> v;
-
-        std::vector<float> fill_rates;
-        std::vector<float> rmses;
-
-        auto show_plane = _viewer.draw_plane;
-
-        auto on_frame = [sensor, &fill_rates, &rmses, this](
-            const std::vector<rs2::float3>& points,
-            const plane p,
-            const rs2::region_of_interest roi,
-            const float baseline_mm,
-            const float focal_length_pixels,
-            const int ground_thruth_mm,
-            const bool plane_fit,
-            const float plane_fit_to_ground_truth_mm,
-            const float distance_mm,
-            bool record,
-            std::vector<single_metric_data>& samples)
-        {
-            static const float TO_MM = 1000.f;
-            static const float TO_PERCENT = 100.f;
-
-            // Calculate fill rate relative to the ROI
-            auto fill_rate = points.size() / float((roi.max_x - roi.min_x)*(roi.max_y - roi.min_y)) * TO_PERCENT;
-            fill_rates.push_back(fill_rate);
-
-            if (!plane_fit) return;
-
-            std::vector<rs2::float3> points_set = points;
-            std::vector<float> distances;
-
-            // Reserve memory for the data
-            distances.reserve(points.size());
-
-            // Convert Z values into Depth values by aligning the Fitted plane with the Ground Truth (GT) plane
-            // Calculate distance and disparity of Z values to the fitted plane.
-            // Use the rotated plane fit to calculate GT errors
-            for (auto point : points_set)
-            {
-                // Find distance from point to the reconstructed plane
-                auto dist2plane = p.a*point.x + p.b*point.y + p.c*point.z + p.d;
-
-                // Store distance, disparity and gt- error
-                distances.push_back(dist2plane * TO_MM);
-            }
-
-            // Remove outliers [below 1% and above 99%)
-            std::sort(points_set.begin(), points_set.end(), [](const rs2::float3& a, const rs2::float3& b) { return a.z < b.z; });
-            size_t outliers = points_set.size() / 50;
-            points_set.erase(points_set.begin(), points_set.begin() + outliers); // crop min 0.5% of the dataset
-            points_set.resize(points_set.size() - outliers); // crop max 0.5% of the dataset
-
-            // Calculate Plane Fit RMS  (Spatial Noise) mm
-            double plane_fit_err_sqr_sum = std::inner_product(distances.begin(), distances.end(), distances.begin(), 0.);
-            auto rms_error_val = static_cast<float>(std::sqrt(plane_fit_err_sqr_sum / distances.size()));
-            auto rms_error_val_per = TO_PERCENT * (rms_error_val / distance_mm);
-            rmses.push_back(rms_error_val_per);
-        };
-
-        auto rms_std = 1000.f;
-        auto new_rms_std = rms_std;
-        auto count = 0;
-
-        // Capture metrics on bundles of 31 frame
-        // Repeat until get "decent" bundle or reach 10 sec
-        do
-        {
-            rms_std = new_rms_std;
-
-            rmses.clear();
-
-            for (int i = 0; i < 31; i++)
-            {
-                f = fetch_depth_frame(invoke);
-                auto res = depth_quality::analyze_depth_image(f, sensor.get_depth_scale(), sensor.get_stereo_baseline(),
-                    &intr, roi, 0, true, v, false, on_frame);
-
-                _viewer.draw_plane = true;
-                _viewer.roi_rect = res.plane_corners;
-            }
-
-            auto rmses_sum_sqr = std::inner_product(rmses.begin(), rmses.end(), rmses.begin(), 0.);
-            new_rms_std = static_cast<float>(std::sqrt(rmses_sum_sqr / rmses.size()));
-        } while ((new_rms_std < rms_std * 0.8f && new_rms_std > 10.f) && count++ < 10);
-
-        std::sort(fill_rates.begin(), fill_rates.end());
-        std::sort(rmses.begin(), rmses.end());
-
-        float median_fill_rate, median_rms;
-        if (fill_rates.empty())
-            median_fill_rate = 0;
-        else
-            median_fill_rate = fill_rates[fill_rates.size() / 2];
-        if (rmses.empty())
-            median_rms = 0;
-        else
-            median_rms = rmses[rmses.size() / 2];
-
-        _viewer.draw_plane = show_plane;
-
-        return { median_fill_rate, median_rms };
     }
 
     std::vector<uint8_t> on_chip_calib_manager::safe_send_command(const std::vector<uint8_t>& cmd, const std::string& name)
@@ -870,6 +745,16 @@ namespace rs2
 
     void on_chip_calib_manager::calibrate()
     {
+        // High exposure values might limit high FPS calibrations, issue warning to the user
+        auto auto_exposure = _sub->s->supports( RS2_OPTION_ENABLE_AUTO_EXPOSURE ) && _sub->s->get_option( RS2_OPTION_ENABLE_AUTO_EXPOSURE );
+        auto exposure = _sub->s->get_option( RS2_OPTION_EXPOSURE ); // Currently all camera models support exposure option (D400 and D500)
+        if( !auto_exposure && exposure > 15500 )
+        {
+            throw std::runtime_error( "Exposure value is limiting the fps,\n"
+                                      "for the algorithm to be able to converge,\n"
+                                      "please reduce exposure value." ); 
+        }
+
         int occ_timeout_ms = 9000;
         if (action == RS2_CALIB_ACTION_ON_CHIP_OB_CALIB || action == RS2_CALIB_ACTION_ON_CHIP_FL_CALIB)
         {
@@ -1347,8 +1232,11 @@ namespace rs2
 
     void on_chip_calib_manager::process_flow(std::function<void()> cleanup, invoker invoke)
     {
-        if (action == RS2_CALIB_ACTION_FL_CALIB || action == RS2_CALIB_ACTION_UVMAPPING_CALIB || action == RS2_CALIB_ACTION_FL_PLUS_CALIB)
-            stop_viewer(invoke);
+        stop_viewer(invoke);
+
+        if( action == RS2_CALIB_ACTION_ON_CHIP_CALIB || action == RS2_CALIB_ACTION_TARE_CALIB )
+            if( _model.is_color_streaming() )
+                throw std::runtime_error( "Turn off RGB Camera streaming before calibrating." );
 
         update_last_used();
 
@@ -1375,6 +1263,9 @@ namespace rs2
 
         _restored = false;
 
+        // Save options before starting to stream as some models change options by default on stream start. e.g. D500 laser on by default for Depth Module streaming.
+        save_options_controlled_by_calib(); // Restored by GUI thread on dismiss or apply.
+
         auto fps = 30;
         if (_sub->dev.supports(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR))
         {
@@ -1382,23 +1273,6 @@ namespace rs2
             if (!starts_with(desc, "3."))
                 fps = 6; //USB2 bandwidth limitation for 720P RGB/DI
         }
-
-        if (action != RS2_CALIB_ACTION_TARE_GROUND_TRUTH && action != RS2_CALIB_ACTION_UVMAPPING_CALIB)
-        {
-            if (!_was_streaming)
-            {
-                if (action == RS2_CALIB_ACTION_FL_CALIB)
-                    try_start_viewer(848, 480, fps, invoke);
-                else
-                    try_start_viewer(0, 0, 0, invoke);
-            }
-
-            // Capture metrics before
-            auto metrics_before = get_depth_metrics(invoke);
-            _metrics.push_back(metrics_before);
-        }
-
-        stop_viewer(invoke);
 
         _ui = std::make_shared<subdevice_ui_selection>(_sub->ui);
         if (action == RS2_CALIB_ACTION_UVMAPPING_CALIB && _sub_color.get())
@@ -1411,56 +1285,35 @@ namespace rs2
             _viewer.is_3d_view = false;
 
 
-        if (action == RS2_CALIB_ACTION_FL_CALIB || action == RS2_CALIB_ACTION_TARE_GROUND_TRUTH || action == RS2_CALIB_ACTION_UVMAPPING_CALIB)
+        if (action == RS2_CALIB_ACTION_FL_CALIB || action == RS2_CALIB_ACTION_TARE_GROUND_TRUTH || action == RS2_CALIB_ACTION_UVMAPPING_CALIB) // Host only calibrations
             try_start_viewer(1280, 720, fps, invoke);
         else
         {
-            if (host_assistance && action != RS2_CALIB_ACTION_TARE_GROUND_TRUTH)
-                try_start_viewer(0, 0, 0, invoke);
+            if (host_assistance)
+                try_start_viewer(1280, 720, 0, invoke); // Host assistance uses HD resolution and crops in host
             else
-                try_start_viewer(256, 144, 90, invoke);
+                try_start_viewer(256, 144, 90, invoke); // Special calibration resolution using an internal cropping of full sensor resolution
         }
+
+        // Change setting after streaming have started and before actual calibration
+        // Emitter on by default, off for GT/FL calib and for D415 model
+        float emitter_value = on_value;
+        if( action == RS2_CALIB_ACTION_FL_CALIB || action == RS2_CALIB_ACTION_TARE_GROUND_TRUTH
+            || device_name_string == std::string( "Intel RealSense D415" ) )
+            emitter_value = off_value;
+        set_laser_emitter_state( emitter_value );
+
+        // Thermal loop should be off during calibration as to not change calibration tables during calibration
+        set_thermal_loop_state( off_value );
 
         if ( action == RS2_CALIB_ACTION_TARE_GROUND_TRUTH )
         {
-            //Laser should be turned off during ground truth calculation
-            //Use options_model::set_option to update GUI after change
-            std::string ignored_error_message { "" };
-            auto it = _sub->options_metadata.find( RS2_OPTION_EMITTER_ENABLED );
-            if ( it != _sub->options_metadata.end() ) //Option supported
-            {
-                laser_status_prev = _sub->s->get_option( RS2_OPTION_EMITTER_ENABLED );
-                it->second.set_option( RS2_OPTION_EMITTER_ENABLED, 0.0f, ignored_error_message );
-            }
-
             get_ground_truth();
-            
-            //Restore laser
-            if ( it != _sub->options_metadata.end() ) //Option supported
-            {
-                it->second.set_option( RS2_OPTION_EMITTER_ENABLED, laser_status_prev, ignored_error_message );
-            }
         }
         else
         {
             try
             {
-                //Save options that are going to change during the calibration
-                //Use options_model::set_option to update GUI after change
-                std::string ignored_error_message { "" };
-                auto it = _sub->options_metadata.find( RS2_OPTION_EMITTER_ENABLED );
-                if ( it != _sub->options_metadata.end() ) //Option supported
-                {
-                    laser_status_prev = _sub->s->get_option( RS2_OPTION_EMITTER_ENABLED );
-                    it->second.set_option( RS2_OPTION_EMITTER_ENABLED, 1.0f, ignored_error_message );
-                }
-                it = _sub->options_metadata.find( RS2_OPTION_THERMAL_COMPENSATION );
-                if ( it != _sub->options_metadata.end() ) //Option supported
-                {
-                    thermal_loop_prev = _sub->s->get_option( RS2_OPTION_THERMAL_COMPENSATION );
-                    it->second.set_option( RS2_OPTION_THERMAL_COMPENSATION, 0.0f, ignored_error_message );
-                }
-
                 if (action == RS2_CALIB_ACTION_FL_CALIB)
                     calibrate_fl();
                 else if (action == RS2_CALIB_ACTION_UVMAPPING_CALIB)
@@ -1481,21 +1334,6 @@ namespace rs2
                 {
                     _sub_color->ui = *_ui_color;
                     _ui_color.reset();
-                }
-
-                //Restore options that were changed during the calibration.
-                //When calibration is successful options are restored in autocalib_notification_model::draw_content()
-                //Use options_model::set_option to update GUI after change
-                std::string ignored_error_message { "" };
-                auto it = _sub->options_metadata.find( RS2_OPTION_EMITTER_ENABLED );
-                if ( it != _sub->options_metadata.end() ) //Option supported
-                {
-                    it->second.set_option( RS2_OPTION_EMITTER_ENABLED, laser_status_prev, ignored_error_message );
-                }
-                it = _sub->options_metadata.find( RS2_OPTION_THERMAL_COMPENSATION );
-                if ( it != _sub->options_metadata.end() ) //Option supported
-                {
-                    it->second.set_option( RS2_OPTION_THERMAL_COMPENSATION, thermal_loop_prev, ignored_error_message );
                 }
 
                 if (_was_streaming)
@@ -1538,10 +1376,6 @@ namespace rs2
 
             // Make new calibration active
             apply_calib(true);
-
-            // Capture metrics after
-            auto metrics_after = get_depth_metrics(invoke);
-            _metrics.push_back(metrics_after);
         }
 
         _progress = 100;
@@ -1642,7 +1476,7 @@ namespace rs2
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("%s", "Calibrate intrinsic parameters of the camera");
+            RsImGui::CustomTooltip("%s", "Calibrate intrinsic parameters of the camera");
         }
         ImGui::SetCursorScreenPos({ float(x + 135), float(y + 35 + ImGui::GetTextLineHeightWithSpacing()) });
 
@@ -1654,7 +1488,7 @@ namespace rs2
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("%s", "Calibrate extrinsic parameters between left and right cameras");
+            RsImGui::CustomTooltip("%s", "Calibrate extrinsic parameters between left and right cameras");
         }
 
         get_manager().intrinsic_scan = intrinsic;
@@ -1761,7 +1595,7 @@ namespace rs2
                 ImGui::Checkbox("Px/Py only", &get_manager().py_px_only);
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "Calibrate: {Fx/Fy/Px/Py}/{Px/Py}");
+                    RsImGui::CustomTooltip("%s", "Calibrate: {Fx/Fy/Px/Py}/{Px/Py}");
                 }
 
                 ImGui::SetCursorScreenPos({ float(x + 9), float(y + height - 25) });
@@ -1782,7 +1616,7 @@ namespace rs2
                 }
 
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "Begin UV-Mapping calibration after adjusting camera position");
+                    RsImGui::CustomTooltip("%s", "Begin UV-Mapping calibration after adjusting camera position");
                 ImGui::PopStyleColor(2);
 
                 string id = rsutils::string::from() << "Py Px Calibration only##py_px_only" << index;
@@ -1798,7 +1632,7 @@ namespace rs2
                 ImGui::Text("%s", "Target Width:");
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "The width of the rectangle in millimeter inside the specific target");
+                    RsImGui::CustomTooltip("%s", "The width of the rectangle in millimeter inside the specific target");
                 }
 
                 const int MAX_SIZE = 256;
@@ -1823,7 +1657,7 @@ namespace rs2
                 ImGui::Text("%s", "Target Height:");
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "The height of the rectangle in millimeter inside the specific target");
+                    RsImGui::CustomTooltip("%s", "The height of the rectangle in millimeter inside the specific target");
                 }
 
                 ImGui::SetCursorScreenPos({ float(x + 135), float(y + 40 + 2 * ImGui::GetTextLineHeightWithSpacing()) });
@@ -1851,10 +1685,6 @@ namespace rs2
                 {
                     get_manager().action = on_chip_calib_manager::RS2_CALIB_ACTION_TARE_CALIB;
                     update_state = update_state_prev;
-                    if (get_manager()._sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                        get_manager()._sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, get_manager().laser_status_prev);
-                    if (get_manager()._sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                        get_manager()._sub->s->set_option(RS2_OPTION_THERMAL_COMPENSATION, get_manager().thermal_loop_prev);
                     get_manager().stop_viewer();
                 }
 
@@ -1879,7 +1709,7 @@ namespace rs2
 
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "Begin calculating Tare Calibration/Distance to Target");
+                    RsImGui::CustomTooltip("%s", "Begin calculating Tare Calibration/Distance to Target");
                 }
             }
             else if (update_state == RS2_CALIB_STATE_GET_TARE_GROUND_TRUTH_IN_PROCESS)
@@ -1891,10 +1721,6 @@ namespace rs2
             {
                 get_manager().action = on_chip_calib_manager::RS2_CALIB_ACTION_TARE_CALIB;
                 update_state = update_state_prev;
-                if (get_manager()._sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                    get_manager()._sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, get_manager().laser_status_prev);
-                if (get_manager()._sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                    get_manager()._sub->s->set_option(RS2_OPTION_THERMAL_COMPENSATION, get_manager().thermal_loop_prev);
             }
             else if (update_state == RS2_CALIB_STATE_GET_TARE_GROUND_TRUTH_FAILED)
             {
@@ -1925,7 +1751,7 @@ namespace rs2
 
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "Retry calculating ground truth");
+                    RsImGui::CustomTooltip("%s", "Retry calculating ground truth");
                 }
             }
             else if (update_state == RS2_CALIB_STATE_TARE_INPUT || update_state == RS2_CALIB_STATE_TARE_INPUT_ADVANCED)
@@ -1933,7 +1759,7 @@ namespace rs2
                 ImGui::PushStyleColor(ImGuiCol_Text, update_state != RS2_CALIB_STATE_TARE_INPUT_ADVANCED ? light_grey : light_blue);
                 ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, update_state != RS2_CALIB_STATE_TARE_INPUT_ADVANCED ? light_grey : light_blue);
 
-                if (ImGui::Button(u8"\uf0d7"))
+                if (ImGui::Button(textual_icons::caret_down))
                 {
                     if (update_state == RS2_CALIB_STATE_TARE_INPUT_ADVANCED)
                         update_state = RS2_CALIB_STATE_TARE_INPUT;
@@ -1944,9 +1770,9 @@ namespace rs2
                 if (ImGui::IsItemHovered())
                 {
                     if (update_state == RS2_CALIB_STATE_TARE_INPUT)
-                        ImGui::SetTooltip("%s", "More Options...");
+                        RsImGui::CustomTooltip("%s", "More Options...");
                     else
-                        ImGui::SetTooltip("%s", "Less Options...");
+                        RsImGui::CustomTooltip("%s", "Less Options...");
                 }
 
                 ImGui::PopStyleColor(2);
@@ -1956,7 +1782,7 @@ namespace rs2
                     ImGui::Text("%s", "Avg Step Count:");
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("%s", "Number of frames to average, Min = 1, Max = 30, Default = 20");
+                        RsImGui::CustomTooltip("%s", "Number of frames to average, Min = 1, Max = 30, Default = 20");
                     }
                     ImGui::SetCursorScreenPos({ float(x + 135), float(y + 30) });
 
@@ -1971,7 +1797,7 @@ namespace rs2
                     ImGui::Text("%s", "Step Count:");
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("%s", "Max iteration steps, Min = 5, Max = 30, Default = 20");
+                        RsImGui::CustomTooltip("%s", "Max iteration steps, Min = 5, Max = 30, Default = 20");
                     }
                     ImGui::SetCursorScreenPos({ float(x + 135), float(y + 35 + ImGui::GetTextLineHeightWithSpacing()) });
 
@@ -1987,7 +1813,7 @@ namespace rs2
                     ImGui::Text("%s", "Accuracy:");
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("%s", "Subpixel accuracy level, Very high = 0 (0.025%), High = 1 (0.05%), Medium = 2 (0.1%), Low = 3 (0.2%), Default = Very high (0.025%)");
+                        RsImGui::CustomTooltip("%s", "Subpixel accuracy level, Very high = 0 (0.025%), High = 1 (0.05%), Medium = 2 (0.1%), Low = 3 (0.2%), Default = Very high (0.025%)");
                     }
 
                     ImGui::SetCursorScreenPos({ float(x + 135), float(y + 40 + 2 * ImGui::GetTextLineHeightWithSpacing()) });
@@ -2027,7 +1853,7 @@ namespace rs2
                 }
 
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "Distance in millimeter to the flat wall, between 60 and 10000.");
+                    RsImGui::CustomTooltip("%s", "Distance in millimeter to the flat wall, between 60 and 10000.");
 
                 std::string id = rsutils::string::from() << "##ground_truth_for_tare" << index;
                 get_manager().ground_truth = config_file::instance().get_or_default(configurations::viewer::ground_truth_r, 1200.0f);
@@ -2061,25 +1887,12 @@ namespace rs2
 
                 if (ImGui::Button(get_button_name.c_str(), { 42.0f, 20.f }))
                 {
-                    if (get_manager()._sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                        get_manager().laser_status_prev = get_manager()._sub->s->get_option(RS2_OPTION_EMITTER_ENABLED);
-                    if (get_manager()._sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                        get_manager().thermal_loop_prev = get_manager()._sub->s->get_option(RS2_OPTION_THERMAL_COMPENSATION);
-
                     update_state_prev = update_state;
                     update_state = RS2_CALIB_STATE_GET_TARE_GROUND_TRUTH;
                     get_manager().start_gt_viewer();
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "Calculate ground truth for the specific target");
-
-                ImGui::SetCursorScreenPos({ float(x + 9), float(y + height - ImGui::GetTextLineHeightWithSpacing() - 30) });
-                get_manager().host_assistance = (get_manager().device_id_string ==  std::string("ABCD") ); // To be used for MIPI SKU only
-                bool assistance = (get_manager().host_assistance != 0);
-                if (ImGui::Checkbox("Host Assistance", &assistance))
-                    get_manager().host_assistance = (assistance ? 1 : 0);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "check = host assitance for statistics data, uncheck = no host assistance");
+                    RsImGui::CustomTooltip("%s", "Calculate ground truth for the specific target");
 
                 std::string button_name = rsutils::string::from() << "Calibrate" << "##tare" << index;
 
@@ -2103,7 +1916,7 @@ namespace rs2
 
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "Begin Tare Calibration");
+                    RsImGui::CustomTooltip("%s", "Begin Tare Calibration");
                 }
             }
             else if (update_state == RS2_CALIB_STATE_SELF_INPUT)
@@ -2150,7 +1963,7 @@ namespace rs2
                     if (ImGui::Checkbox("Adjust both sides focal length", &restore))
                         get_manager().adjust_both_sides = (restore ? 1 : 0);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "check = adjust both sides, uncheck = adjust right side only");
+                        RsImGui::CustomTooltip("%s", "check = adjust both sides, uncheck = adjust right side only");
                 }*/
 
                 // Deprecase OCC-Extended
@@ -2161,20 +1974,14 @@ namespace rs2
                 //if (ImGui::RadioButton("OCC", (int*)&(get_manager().action), 1))
                 //    get_manager().action = on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_CALIB;
                 //if (ImGui::IsItemHovered())
-                //    ImGui::SetTooltip("%s", "On-chip calibration");
+                //    RsImGui::CustomTooltip("%s", "On-chip calibration");
 
                 //ImGui::SetCursorScreenPos({ float(x + 135),  tmp_y });
                 //if (ImGui::RadioButton("OCC Extended", (int *)&(get_manager().action), 0))
                 //    get_manager().action = on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_OB_CALIB;
                 //if (ImGui::IsItemHovered())
-                //    ImGui::SetTooltip("%s", "On-Chip Calibration Extended");
+                //    RsImGui::CustomTooltip("%s", "On-Chip Calibration Extended");
 
-                ImGui::SetCursorScreenPos({ float(x + 9), float(y + height - ImGui::GetTextLineHeightWithSpacing() - 31) });
-                get_manager().host_assistance = (get_manager().device_id_string ==  std::string("ABCD") ); // To be used for MIPI SKU only
-                bool assistance = (get_manager().host_assistance != 0);
-                ImGui::Checkbox("Host Assistance", &assistance);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "check = host assitance for statistics data, uncheck = no host assistance");
 
                 auto sat = 1.f + sin(duration_cast<milliseconds>(system_clock::now() - created_time).count() / 700.f) * 0.1f;
                 ImGui::PushStyleColor(ImGuiCol_Button, saturate(sensor_header_light_blue, sat));
@@ -2198,7 +2005,7 @@ namespace rs2
                 ImGui::PopStyleColor(2);
 
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "Begin On-Chip Calibration");
+                    RsImGui::CustomTooltip("%s", "Begin On-Chip Calibration");
             }
             else if (update_state == RS2_CALIB_STATE_FL_INPUT)
             {
@@ -2209,7 +2016,7 @@ namespace rs2
                 ImGui::Text("%s", "Target Width (mm):");
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "The width of the rectangle in millimeters inside the specific target");
+                    RsImGui::CustomTooltip("%s", "The width of the rectangle in millimeters inside the specific target");
                 }
 
                 const int MAX_SIZE = 256;
@@ -2234,7 +2041,7 @@ namespace rs2
                 ImGui::Text("%s", "Target Height (mm):");
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "The height of the rectangle in millimeters inside the specific target");
+                    RsImGui::CustomTooltip("%s", "The height of the rectangle in millimeters inside the specific target");
                 }
 
                 ImGui::SetCursorScreenPos({ float(x + 145), float(y + 77 + 2 * ImGui::GetTextLineHeightWithSpacing()) });
@@ -2257,7 +2064,7 @@ namespace rs2
                 if (ImGui::Checkbox("Adjust both sides focal length", &adj_both))
                     get_manager().adjust_both_sides = (adj_both ? 1 : 0);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "check = adjust both sides, uncheck = adjust right side only");
+                    RsImGui::CustomTooltip("%s", "check = adjust both sides, uncheck = adjust right side only");
 
                 ImGui::SetCursorScreenPos({ float(x + 9), float(y + height - 25) });
                 auto sat = 1.f + sin(duration_cast<milliseconds>(system_clock::now() - created_time).count() / 700.f) * 0.1f;
@@ -2269,11 +2076,6 @@ namespace rs2
                 ImGui::SetCursorScreenPos({ float(x + 5), float(y + height - 25) });
                 if (ImGui::Button(button_name.c_str(), { float(bar_width), 20.f }))
                 {
-                    if (get_manager()._sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                        get_manager().laser_status_prev = get_manager()._sub->s->get_option(RS2_OPTION_EMITTER_ENABLED);
-                    if (get_manager()._sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                        get_manager().thermal_loop_prev = get_manager()._sub->s->get_option(RS2_OPTION_THERMAL_COMPENSATION);
-
                     get_manager().restore_workspace([this](std::function<void()> a) { a(); });
                     get_manager().reset();
                     get_manager().retry_times = 0;
@@ -2287,7 +2089,7 @@ namespace rs2
                     enable_dismiss = false;
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", "Start focal length calibration after setting up camera position correctly.");
+                    RsImGui::CustomTooltip("%s", "Start focal length calibration after setting up camera position correctly.");
                 ImGui::PopStyleColor(2);
             }
             else if (update_state == RS2_CALIB_STATE_FAILED)
@@ -2340,35 +2142,13 @@ namespace rs2
                     ImGui::PopStyleColor(2);
 
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "Retry on-chip calibration process");
+                        RsImGui::CustomTooltip("%s", "Retry on-chip calibration process");
                 }
             }
             else if (update_state == RS2_CALIB_STATE_CALIB_COMPLETE)
             {
-                if (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_CALIB ||
-                    get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_TARE_CALIB )
-                {
-                    //Restore options that were changed during the calibration.
-                    //Use options_model::set_option to update GUI after change
-                    std::string ignored_error_message { "" };
-                    auto it = get_manager()._sub->options_metadata.find( RS2_OPTION_EMITTER_ENABLED );
-                    if ( it != get_manager()._sub->options_metadata.end() ) //Option supported
-                    {
-                        it->second.set_option( RS2_OPTION_EMITTER_ENABLED, get_manager().laser_status_prev, ignored_error_message );
-                    }
-                    it = get_manager()._sub->options_metadata.find( RS2_OPTION_THERMAL_COMPENSATION );
-                    if ( it != get_manager()._sub->options_metadata.end() ) //Option supported
-                    {
-                        it->second.set_option( RS2_OPTION_THERMAL_COMPENSATION, get_manager().thermal_loop_prev, ignored_error_message );
-                    }
-                }
                 if (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_UVMAPPING_CALIB)
                 {
-                    if (get_manager()._sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                        get_manager()._sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, get_manager().laser_status_prev);
-                    if (get_manager()._sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                        get_manager()._sub->s->set_option(RS2_OPTION_THERMAL_COMPENSATION, get_manager().thermal_loop_prev);
-
                     ImGui::SetCursorScreenPos({ float(x + 20), float(y + 33) });
                     ImGui::Text("%s", "Health-Check Number for PX: ");
 
@@ -2396,7 +2176,7 @@ namespace rs2
                     std::string text_name_1 = rsutils::string::from() << "##notification_text_1_" << index;
                     ImGui::InputTextMultiline(text_name_1.c_str(), const_cast<char*>(health_str.c_str()), strlen(health_str.c_str()) + 1, { 86, ImGui::GetTextLineHeight() + 6 }, ImGuiInputTextFlags_ReadOnly);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "Health check for PX");
+                        RsImGui::CustomTooltip("%s", "Health check for PX");
 
                     ImGui::SetCursorScreenPos({ float(x + 220), float(y + 35) + ImGui::GetTextLineHeightWithSpacing() });
                     std::stringstream ss_2;
@@ -2405,7 +2185,7 @@ namespace rs2
                     std::string text_name_2 = rsutils::string::from() << "##notification_text_2_" << index;
                     ImGui::InputTextMultiline(text_name_2.c_str(), const_cast<char*>(health_str.c_str()), strlen(health_str.c_str()) + 1, { 86, ImGui::GetTextLineHeight() + 6 }, ImGuiInputTextFlags_ReadOnly);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "Health check for PY");
+                        RsImGui::CustomTooltip("%s", "Health check for PY");
 
                     ImGui::SetCursorScreenPos({ float(x + 220), float(y + 40) + 2 * ImGui::GetTextLineHeightWithSpacing() });
                     std::stringstream ss_3;
@@ -2414,7 +2194,7 @@ namespace rs2
                     std::string text_name_3 = rsutils::string::from() << "##notification_text_3_" << index;
                     ImGui::InputTextMultiline(text_name_3.c_str(), const_cast<char*>(health_str.c_str()), strlen(health_str.c_str()) + 1, { 86, ImGui::GetTextLineHeight() + 6 }, ImGuiInputTextFlags_ReadOnly);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "Health check for FX");
+                        RsImGui::CustomTooltip("%s", "Health check for FX");
 
                     ImGui::SetCursorScreenPos({ float(x + 220), float(y + 45) + 3 * ImGui::GetTextLineHeightWithSpacing() });
                     std::stringstream ss_4;
@@ -2423,7 +2203,7 @@ namespace rs2
                     std::string text_name_4 = rsutils::string::from() << "##notification_text_4_" << index;
                     ImGui::InputTextMultiline(text_name_4.c_str(), const_cast<char*>(health_str.c_str()), strlen(health_str.c_str()) + 1, { 86, ImGui::GetTextLineHeight() + 6 }, ImGuiInputTextFlags_ReadOnly);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "Health check for FY");
+                        RsImGui::CustomTooltip("%s", "Health check for FY");
 
                     ImGui::PopStyleColor(7);
 
@@ -2449,18 +2229,10 @@ namespace rs2
 
                     ImGui::PopStyleColor(2);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "New calibration values will be saved in device");
+                        RsImGui::CustomTooltip("%s", "New calibration values will be saved in device");
                 }
                 else
                 {
-                    if (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_FL_CALIB)
-                    {
-                        if (get_manager()._sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                            get_manager()._sub->s->set_option(RS2_OPTION_EMITTER_ENABLED, get_manager().laser_status_prev);
-                        if (get_manager()._sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                            get_manager()._sub->s->set_option(RS2_OPTION_THERMAL_COMPENSATION, get_manager().thermal_loop_prev);
-                    }
-
                     auto health = get_manager().get_health();
 
                     auto recommend_keep = fabs(health) < 0.25f;
@@ -2509,7 +2281,7 @@ namespace rs2
                             ImGui::PopStyleColor(7);
 
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s", "Health-check number before Tare Calibration");
+                                RsImGui::CustomTooltip("%s", "Health-check number before Tare Calibration");
 
                             ImGui::SetCursorScreenPos({ float(x + 10), float(y + 38) + ImGui::GetTextLineHeightWithSpacing() });
                             ImGui::Text("%s", "Health-Check After Calibration: ");
@@ -2532,7 +2304,7 @@ namespace rs2
                             ImGui::PopStyleColor(7);
 
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s", "Health-check number after Tare Calibration");
+                                RsImGui::CustomTooltip("%s", "Health-check number after Tare Calibration");
                         }
                     }
                     else if (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_OB_CALIB)
@@ -2577,7 +2349,7 @@ namespace rs2
 
                         if (ImGui::IsItemHovered())
                         {
-                            ImGui::SetTooltip("%s", "OCC Health-Check captures how far camera calibration is from the optimal one\n"
+                            RsImGui::CustomTooltip("%s", "OCC Health-Check captures how far camera calibration is from the optimal one\n"
                                 "[0, 0.25) - Good\n"
                                 "[0.25, 0.75) - Can be Improved\n"
                                 "[0.75, ) - Requires Calibration");
@@ -2624,7 +2396,7 @@ namespace rs2
 
                         if (ImGui::IsItemHovered())
                         {
-                            ImGui::SetTooltip("%s", "OCC-FL Health-Check captures how far camera calibration is from the optimal one\n"
+                            RsImGui::CustomTooltip("%s", "OCC-FL Health-Check captures how far camera calibration is from the optimal one\n"
                                 "[0, 0.15) - Good\n"
                                 "[0.15, 0.75) - Can be Improved\n"
                                 "[0.75, ) - Requires Calibration");
@@ -2716,14 +2488,14 @@ namespace rs2
                         {
                             if (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_CALIB)
                             {
-                                ImGui::SetTooltip("%s", "Calibration Health-Check captures how far camera calibration is from the optimal one\n"
+                                RsImGui::CustomTooltip("%s", "Calibration Health-Check captures how far camera calibration is from the optimal one\n"
                                     "[0, 0.25) - Good\n"
                                     "[0.25, 0.75) - Can be Improved\n"
                                     "[0.75, ) - Requires Calibration");
                             }
                             else
                             {
-                                ImGui::SetTooltip("%s", "Calibration Health-Check captures how far camera calibration is from the optimal one\n"
+                                RsImGui::CustomTooltip("%s", "Calibration Health-Check captures how far camera calibration is from the optimal one\n"
                                     "[0, 0.15) - Good\n"
                                     "[0.15, 0.75) - Can be Improved\n"
                                     "[0.75, ) - Requires Calibration");
@@ -2731,90 +2503,8 @@ namespace rs2
                         }
                     }
 
-                    auto old_fr = get_manager().get_metric(false).first;
-                    auto new_fr = get_manager().get_metric(true).first;
-
-                    auto old_rms = fabs(get_manager().get_metric(false).second);
-                    auto new_rms = fabs(get_manager().get_metric(true).second);
-
-                    auto fr_improvement = 100.f * ((new_fr - old_fr) / old_fr);
-                    auto rms_improvement = 100.f * ((old_rms - new_rms) / old_rms);
-
-                    std::string old_units = "mm";
-                    if (old_rms > 10.f)
-                    {
-                        old_rms /= 10.f;
-                        old_units = "cm";
-                    }
-
-                    std::string new_units = "mm";
-                    if (new_rms > 10.f)
-                    {
-                        new_rms /= 10.f;
-                        new_units = "cm";
-                    }
-
-                    // NOTE: Disabling metrics temporarily
-                    // TODO: Re-enable in future release
-                    if (/* fr_improvement > 1.f || rms_improvement > 1.f */ false)
-                    {
-                        std::string txt = rsutils::string::from() << "  Fill-Rate: " << std::setprecision(1) << std::fixed << new_fr << "%%";
-                        if (!use_new_calib)
-                            txt = rsutils::string::from() << "  Fill-Rate: " << std::setprecision(1) << std::fixed << old_fr << "%%\n";
-
-                        ImGui::SetCursorScreenPos({ float(x + 12), float(y + 90) });
-                        ImGui::PushFont(win.get_large_font());
-                        ImGui::Text("%s", static_cast<const char*>(textual_icons::check));
-                        ImGui::PopFont();
-
-                        ImGui::SetCursorScreenPos({ float(x + 35), float(y + 92) });
-                        ImGui::Text("%s", txt.c_str());
-
-                        if (use_new_calib)
-                        {
-                            ImGui::SameLine();
-
-                            ImGui::PushStyleColor(ImGuiCol_Text, white);
-                            txt = rsutils::string::from() << " ( +" << std::fixed << std::setprecision(0) << fr_improvement << "%% )";
-                            ImGui::Text("%s", txt.c_str());
-                            ImGui::PopStyleColor();
-                        }
-
-                        if (rms_improvement > 1.f)
-                        {
-                            if (use_new_calib)
-                            {
-                                txt = rsutils::string::from() << "  Noise Estimate: " << std::setprecision(2) << std::fixed << new_rms << new_units;
-                            }
-                            else
-                            {
-                                txt = rsutils::string::from() << "  Noise Estimate: " << std::setprecision(2) << std::fixed << old_rms << old_units;
-                            }
-
-                            ImGui::SetCursorScreenPos({ float(x + 12), float(y + 90 + ImGui::GetTextLineHeight() + 6) });
-                            ImGui::PushFont(win.get_large_font());
-                            ImGui::Text("%s", static_cast<const char*>(textual_icons::check));
-                            ImGui::PopFont();
-
-                            ImGui::SetCursorScreenPos({ float(x + 35), float(y + 92 + ImGui::GetTextLineHeight() + 6) });
-                            ImGui::Text("%s", txt.c_str());
-
-                            if (use_new_calib)
-                            {
-                                ImGui::SameLine();
-
-                                ImGui::PushStyleColor(ImGuiCol_Text, white);
-                                txt = rsutils::string::from() << " ( -" << std::setprecision(0) << std::fixed << rms_improvement << "%% )";
-                                ImGui::Text("%s", txt.c_str());
-                                ImGui::PopStyleColor();
-                            }
-                        }
-                    }
-                    else
-                    {
-                        ImGui::SetCursorScreenPos({ float(x + 7), (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_OB_CALIB || get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_FL_CALIB ? float(y + 105) + ImGui::GetTextLineHeightWithSpacing() : (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_TARE_CALIB ? (get_manager().tare_health ? float(y + 105) : float(y + 50)) + ImGui::GetTextLineHeightWithSpacing() : float(y + 105))) });
-                        ImGui::Text("%s", "Please compare new vs old calibration\nand decide if to keep or discard the result...");
-                    }
+                    ImGui::SetCursorScreenPos({ float(x + 7), (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_OB_CALIB || get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_FL_CALIB ? float(y + 105) + ImGui::GetTextLineHeightWithSpacing() : (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_TARE_CALIB ? (get_manager().tare_health ? float(y + 105) : float(y + 50)) + ImGui::GetTextLineHeightWithSpacing() : float(y + 105))) });
+                    ImGui::Text("%s", "Please compare new vs old calibration\nand decide if to keep or discard the result...");
 
                     ImGui::SetCursorScreenPos({ float(x + 20), (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_ON_CHIP_OB_CALIB || get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_FL_CALIB ? float(y + 70) + ImGui::GetTextLineHeightWithSpacing() : (get_manager().action == on_chip_calib_manager::RS2_CALIB_ACTION_TARE_CALIB ? (get_manager().tare_health ? float(y + 70) : float(y + 15)) + ImGui::GetTextLineHeightWithSpacing() : float(y + 70))) });
 
@@ -2851,11 +2541,6 @@ namespace rs2
                         ImGui::SetCursorScreenPos({ float(x + 5), float(y + height - 25) });
                         if (ImGui::Button(button_name.c_str(), { scale * 3, 20.f }))
                         {
-                            if (get_manager()._sub->s->supports(RS2_OPTION_EMITTER_ENABLED))
-                                get_manager().laser_status_prev = get_manager()._sub->s->get_option(RS2_OPTION_EMITTER_ENABLED);
-                            if (get_manager()._sub->s->supports(RS2_OPTION_THERMAL_COMPENSATION))
-                                get_manager().thermal_loop_prev = get_manager()._sub->s->get_option(RS2_OPTION_THERMAL_COMPENSATION);
-
                             get_manager().restore_workspace([this](std::function<void()> a) { a(); });
                             get_manager().reset();
                             get_manager().retry_times = 0;
@@ -2892,6 +2577,7 @@ namespace rs2
                             dismiss(false);
                         }
 
+                        get_manager().restore_options_controlled_by_calib();
                         get_manager().restore_workspace([](std::function<void()> a) { a(); });
                     }
 
@@ -2899,7 +2585,7 @@ namespace rs2
                         ImGui::PopStyleColor(2);
 
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", "New calibration values will be saved in device");
+                        RsImGui::CustomTooltip("%s", "New calibration values will be saved in device");
                 }
             }
 
@@ -2911,7 +2597,7 @@ namespace rs2
 
             ImGui::SetCursorScreenPos({ float(x + 10), float(y + 35) });
             ImGui::PushFont(win.get_large_font());
-            std::string txt = rsutils::string::from() << textual_icons::throphy;
+            std::string txt = rsutils::string::from() << textual_icons::trophy;
             ImGui::Text("%s", txt.c_str());
             ImGui::PopFont();
 
@@ -2948,7 +2634,7 @@ namespace rs2
 
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s", "Keep the camera pointing at an object or a wall");
+                    RsImGui::CustomTooltip("%s", "Keep the camera pointing at an object or a wall");
                 }
             }
             else if (update_state == RS2_CALIB_STATE_GET_TARE_GROUND_TRUTH_IN_PROCESS)
@@ -3010,7 +2696,8 @@ namespace rs2
         if (!use_new_calib && get_manager().done())
             get_manager().apply_calib(false);
 
-        get_manager().restore_workspace([](std::function<void()> a){ a(); });
+        get_manager().restore_options_controlled_by_calib();
+        get_manager().restore_workspace( []( std::function< void() > a ) { a(); } );
 
         if (update_state != RS2_CALIB_STATE_TARE_INPUT)
             update_state = RS2_CALIB_STATE_INITIAL_PROMPT;
@@ -3154,7 +2841,7 @@ namespace rs2
         }
     }
 
-    autocalib_notification_model::autocalib_notification_model(std::string name, std::shared_ptr<on_chip_calib_manager> manager, bool exp)
+    autocalib_notification_model::autocalib_notification_model(std::string name, std::shared_ptr<process_manager> manager, bool exp)
         : process_notification_model(manager)
     {
         enable_expand = false;

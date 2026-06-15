@@ -1,5 +1,5 @@
 // License: Apache 2.0. See LICENSE file in root directory.
-// Copyright(c) 2017 Intel Corporation. All Rights Reserved.
+// Copyright(c) 2017 RealSense, Inc. All Rights Reserved.
 
 #ifndef LIBREALSENSE_RS2_INTERNAL_HPP
 #define LIBREALSENSE_RS2_INTERNAL_HPP
@@ -87,6 +87,22 @@ namespace rs2
             rs2_error* e = nullptr;
 
             auto profile = rs2_software_sensor_add_pose_stream_ex(_sensor.get(), pose_stream, is_default, &e);
+            error::handle(e);
+
+            stream_profile stream(profile);
+            return stream;
+        }
+
+        /**
+        * Add inference stream to software sensor
+        *
+        * \param[in] inference_stream   all the parameters that required to define an inference stream
+        */
+        stream_profile add_inference_stream(rs2_inference_stream inference_stream, bool is_default=false)
+        {
+            rs2_error* e = nullptr;
+
+            auto profile = rs2_software_sensor_add_inference_stream_ex(_sensor.get(), inference_stream, is_default, &e);
             error::handle(e);
 
             stream_profile stream(profile);
@@ -396,9 +412,16 @@ namespace rs2
         std::string thread_name() const
         {
             rs2_error* e = nullptr;
-            std::string thread_name(rs2_get_fw_log_parsed_thread_name(_parsed_fw_log.get(), &e));
+            std::string name(rs2_get_fw_log_parsed_thread_name(_parsed_fw_log.get(), &e));
             error::handle(e);
-            return thread_name;
+            return name;
+        }
+        std::string module_name() const
+        {
+            rs2_error * e = nullptr;
+            std::string name( rs2_get_fw_log_parsed_module_name( _parsed_fw_log.get(), &e ) );
+            error::handle( e );
+            return name;
         }
         std::string severity() const
         {
@@ -448,6 +471,20 @@ namespace rs2
                 _dev.reset();
             }
             error::handle(e);
+        }
+
+        void start_collecting()
+        {
+            rs2_error * e = nullptr;
+            rs2_start_collecting_fw_logs( _dev.get(), &e );
+            error::handle( e );
+        }
+
+        void stop_collecting()
+        {
+            rs2_error * e = nullptr;
+            rs2_stop_collecting_fw_logs( _dev.get(), &e );
+            error::handle( e );
         }
 
         rs2::firmware_log_message create_message()
