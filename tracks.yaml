@@ -368,8 +368,6 @@ tracks:
       :{release_inc} --os-name fedora
     - git-bloom-generate -y rosrpm --prefix release/:{ros_distro} :{ros_distro} -i
       :{release_inc} --os-name rhel
-    - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
-      -i :{release_inc} --require-os fedora rhel
     devel_branch: null
     last_release: v2.57.7
     last_version: 2.57.7
@@ -381,4 +379,4 @@ tracks:
     ros_distro: rolling
     vcs_type: git
     vcs_uri: https://github.com/realsenseai/librealsense.git
-    version: 2.57.7
+    version: 2.58.2
