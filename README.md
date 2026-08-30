@@ -1,3 +1,26 @@
+## librealsense2 (jazzy) - 2.58.4-1
+
+The packages in the `librealsense2` repository were released into the `jazzy` distro by running `/usr/bin/bloom-release --ros-distro jazzy --track jazzy librealsense2 --edit` on `Sun, 30 Aug 2026 13:01:12 -0000`
+
+The `librealsense2` package was released.
+
+Version of package(s) in repository `librealsense2`:
+
+- upstream repository: https://github.com/realsenseai/librealsense.git
+- release repository: https://github.com/ros2-gbp/librealsense2-release.git
+- rosdistro version: `2.58.3-1`
+- old version: `2.58.3-1`
+- new version: `2.58.4-1`
+
+Versions of tools used:
+
+- bloom version: `0.14.3`
+- catkin_pkg version: `1.1.0`
+- rosdep version: `0.26.0`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## librealsense2 (humble) - 2.58.4-1
 
 The packages in the `librealsense2` repository were released into the `humble` distro by running `/usr/bin/bloom-release --ros-distro humble --track humble librealsense2 --edit` on `Sun, 30 Aug 2026 12:50:04 -0000`
