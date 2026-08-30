@@ -304,7 +304,7 @@ tracks:
     ros_distro: lyrical
     vcs_type: git
     vcs_uri: https://github.com/realsenseai/librealsense.git
-    version: 2.57.7
+    version: :{auto}
   melodic:
     actions:
     - bloom-export-upstream :{vcs_local_uri} :{vcs_type} --tag :{release_tag} --display-uri
