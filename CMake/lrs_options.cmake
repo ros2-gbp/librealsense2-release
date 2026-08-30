@@ -4,7 +4,7 @@
 ## regular comments should be ABOVE their relevent option
 ## use double # for comments that should not show in the options doc
 
-option(ENABLE_CCACHE "Build with ccache." ON)
+option(ENABLE_CCACHE "Build with ccache." OFF)
 option(BUILD_WITH_CUDA "Enable CUDA" OFF)
 # Zero-copy GPU memory path (Jetson / integrated-GPU only). Requires BUILD_WITH_CUDA.
 # Eliminates the per-frame CPU->frame copy (capture) and the GPU host<->device round-trips.
@@ -20,8 +20,8 @@ option(COM_MULTITHREADED "Set OFF to initialize COM library with COINIT_APARTMEN
 option(BUILD_SHARED_LIBS "Build shared library" ON)
 option(BUILD_UNIT_TESTS "Build LibCI unit tests. If enabled, additional test data may be downloaded" OFF)
 option(BUILD_VIEWER_TESTS "Build automated GUI tests for realsense-viewer, will use FetchContent for the test engine files" OFF)
-option(BUILD_EXAMPLES "Build examples (not including graphical examples -- see BUILD_GRAPHICAL_EXAMPLES)" ON)
-option(BUILD_GRAPHICAL_EXAMPLES "Build graphical examples (Viewer & DQT) -- Implies BUILD_GLSL_EXTENSIONS" ON)
+option(BUILD_EXAMPLES "Build examples (not including graphical examples -- see BUILD_GRAPHICAL_EXAMPLES)" OFF)
+option(BUILD_GRAPHICAL_EXAMPLES "Build graphical examples (Viewer & DQT) -- Implies BUILD_GLSL_EXTENSIONS" OFF)
 option(BUILD_CV_EXAMPLES "Build OpenCV examples" OFF)
 option(BUILD_DLIB_EXAMPLES "Build DLIB examples - requires DLIB_DIR" OFF)
 option(BUILD_PCL_EXAMPLES "Build PCL examples" OFF)
