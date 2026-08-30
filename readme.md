@@ -27,7 +27,11 @@ Please make sure to update your links to the new RealSenseAI organization for bo
 
 [https://github.com/**IntelRealSense**/librealsense](https://github.com/IntelRealSense/librealsense) --> [https://github.com/**realsenseai**/librealsense](https://github.com/realsenseai/librealsense)
 
-Note: A redirection from the previous name IntelRealSense is currently in place, but we cannot guarantee how long it will remain active. We recommend that all users update their references to point to the new GitHub location.
+>Note 1: A redirection from the previous name IntelRealSense is currently in place, but we cannot guarantee how long it will remain active. We recommend that all users update their references to point to the new GitHub location.
+
+>Note 2: Users who install the SDK via APT are required to update the APT key as explained in the following [guide](https://github.com/realsenseai/librealsense/blob/development/doc/distribution_linux.md#installing-the-packages)
+
+>Note 3: New closed-source libraries are available on our [Perception Studio](https://www.realsenseai.com/perception-studio/) page. Recent drop includes close-range performance (min-z).
 
 #### Branch Policy
 We have updated our branch policy:
