@@ -1,3 +1,26 @@
+## librealsense2 (lyrical) - 2.59.1-1
+
+The packages in the `librealsense2` repository were released into the `lyrical` distro by running `/usr/bin/bloom-release librealsense2 --rosdistro lyrical --track lyrical --non-interactive --no-web` on `Sun, 11 Oct 2026 13:31:25 -0000`
+
+The `librealsense2` package was released.
+
+Version of package(s) in repository `librealsense2`:
+
+- upstream repository: https://github.com/realsenseai/librealsense.git
+- release repository: https://github.com/ros2-gbp/librealsense2-release.git
+- rosdistro version: `2.58.4-1`
+- old version: `2.58.4-1`
+- new version: `2.59.1-1`
+
+Versions of tools used:
+
+- bloom version: `0.14.3`
+- catkin_pkg version: `1.1.0`
+- rosdep version: `0.26.0`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## librealsense2 (kilted) - 2.59.1-1
 
 The packages in the `librealsense2` repository were released into the `kilted` distro by running `/usr/bin/bloom-release librealsense2 --rosdistro kilted --track kilted --non-interactive --no-web` on `Sun, 11 Oct 2026 13:28:47 -0000`
