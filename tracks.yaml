@@ -125,7 +125,7 @@ tracks:
       :{release_inc} --os-name rhel
     - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
       -i :{release_inc} --require-os fedora rhel
-    devel_branch: null
+    devel_branch: master
     last_release: v2.58.4
     last_version: 2.58.4
     name: upstream
@@ -136,7 +136,7 @@ tracks:
     ros_distro: humble
     vcs_type: git
     vcs_uri: https://github.com/realsenseai/librealsense.git
-    version: 2.58.4
+    version: :{auto}
   hunble:
     actions:
     - bloom-export-upstream :{vcs_local_uri} :{vcs_type} --tag :{release_tag} --display-uri
@@ -208,7 +208,7 @@ tracks:
       :{release_inc} --os-name rhel
     - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
       -i :{release_inc} --require-os fedora rhel
-    devel_branch: null
+    devel_branch: master
     last_release: v2.58.4
     last_version: 2.58.4
     name: upstream
@@ -237,7 +237,7 @@ tracks:
       :{release_inc} --os-name rhel
     - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
       -i :{release_inc} --require-os fedora rhel
-    devel_branch: null
+    devel_branch: master
     last_release: v2.58.4
     last_version: 2.58.4
     name: upstream
@@ -293,7 +293,7 @@ tracks:
       :{release_inc} --os-name rhel
     - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
       -i :{release_inc} --require-os fedora rhel
-    devel_branch: null
+    devel_branch: master
     last_release: v2.58.4
     last_version: 2.58.4
     name: upstream
@@ -376,7 +376,7 @@ tracks:
       :{release_inc} --os-name rhel
     - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
       -i :{release_inc} --require-os fedora rhel
-    devel_branch: null
+    devel_branch: master
     last_release: v2.58.4
     last_version: 2.58.4
     name: upstream
