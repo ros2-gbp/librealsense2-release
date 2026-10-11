@@ -1,4 +1,4 @@
-From 8aa4b54ef1f7012cf4ab2ae43d6129f977b2a4eb Mon Sep 17 00:00:00 2001
+From 85f9cb04585eccbb4c53ac6f4695e3e163b0693c Mon Sep 17 00:00:00 2001
 From: Nir-Az <nir.azkiel@realsenseai.com>
 Date: Sun, 30 Aug 2026 16:22:16 +0300
 Subject: [PATCH] Update lrs options for release build
@@ -8,7 +8,7 @@ Subject: [PATCH] Update lrs options for release build
  1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/CMake/lrs_options.cmake b/CMake/lrs_options.cmake
-index 3dbc633b..9769840f 100644
+index a45a0dec..aa086f10 100644
 --- a/CMake/lrs_options.cmake
 +++ b/CMake/lrs_options.cmake
 @@ -4,7 +4,7 @@
@@ -18,12 +18,12 @@ index 3dbc633b..9769840f 100644
 -option(ENABLE_CCACHE "Build with ccache." ON)
 +option(ENABLE_CCACHE "Build with ccache." OFF)
  option(BUILD_WITH_CUDA "Enable CUDA" OFF)
- option(BUILD_GLSL_EXTENSIONS "Build GLSL extensions API" ON)
- option(BUILD_WITH_OPENMP "Use OpenMP" OFF)
-@@ -14,8 +14,8 @@ option(HWM_OVER_XU "Send HWM commands over UVC XU control" ON)
- option(COM_MULTITHREADED "Set OFF to initialize COM library with COINIT_APARTMENTTHREADED (Windows only)" ON)
+ # Zero-copy GPU memory path (Jetson / integrated-GPU only). Requires BUILD_WITH_CUDA.
+ # Eliminates the per-frame CPU->frame copy (capture) and the GPU host<->device round-trips.
+@@ -20,8 +20,8 @@ option(COM_MULTITHREADED "Set OFF to initialize COM library with COINIT_APARTMEN
  option(BUILD_SHARED_LIBS "Build shared library" ON)
  option(BUILD_UNIT_TESTS "Build LibCI unit tests. If enabled, additional test data may be downloaded" OFF)
+ option(BUILD_VIEWER_TESTS "Build automated GUI tests for realsense-viewer, will use FetchContent for the test engine files" OFF)
 -option(BUILD_EXAMPLES "Build examples (not including graphical examples -- see BUILD_GRAPHICAL_EXAMPLES)" ON)
 -option(BUILD_GRAPHICAL_EXAMPLES "Build graphical examples (Viewer & DQT) -- Implies BUILD_GLSL_EXTENSIONS" ON)
 +option(BUILD_EXAMPLES "Build examples (not including graphical examples -- see BUILD_GRAPHICAL_EXAMPLES)" OFF)
