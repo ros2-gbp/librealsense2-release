@@ -1,4 +1,4 @@
-From 85f9cb04585eccbb4c53ac6f4695e3e163b0693c Mon Sep 17 00:00:00 2001
+From 12608de40252fd3159c09c56767bec28bd5c54e2 Mon Sep 17 00:00:00 2001
 From: Nir-Az <nir.azkiel@realsenseai.com>
 Date: Sun, 30 Aug 2026 16:22:16 +0300
 Subject: [PATCH] Update lrs options for release build
@@ -8,7 +8,7 @@ Subject: [PATCH] Update lrs options for release build
  1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/CMake/lrs_options.cmake b/CMake/lrs_options.cmake
-index a45a0dec..aa086f10 100644
+index 9866ee29..99d4ee4d 100644
 --- a/CMake/lrs_options.cmake
 +++ b/CMake/lrs_options.cmake
 @@ -4,7 +4,7 @@
@@ -18,9 +18,9 @@ index a45a0dec..aa086f10 100644
 -option(ENABLE_CCACHE "Build with ccache." ON)
 +option(ENABLE_CCACHE "Build with ccache." OFF)
  option(BUILD_WITH_CUDA "Enable CUDA" OFF)
+ 
  # Zero-copy GPU memory path (Jetson / integrated-GPU only). Requires BUILD_WITH_CUDA.
- # Eliminates the per-frame CPU->frame copy (capture) and the GPU host<->device round-trips.
-@@ -20,8 +20,8 @@ option(COM_MULTITHREADED "Set OFF to initialize COM library with COINIT_APARTMEN
+@@ -32,8 +32,8 @@ option(COM_MULTITHREADED "Set OFF to initialize COM library with COINIT_APARTMEN
  option(BUILD_SHARED_LIBS "Build shared library" ON)
  option(BUILD_UNIT_TESTS "Build LibCI unit tests. If enabled, additional test data may be downloaded" OFF)
  option(BUILD_VIEWER_TESTS "Build automated GUI tests for realsense-viewer, will use FetchContent for the test engine files" OFF)
